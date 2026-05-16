@@ -116,6 +116,97 @@ var dto = Mapper.Map<ProductEntity, ProductDto>(entity);
 
 ---
 
+## Property Name Overrides: `[MapFrom]` and `[MapTo]`
+
+When source and destination properties have different names but you don't want — or can't — add `[MapIndex]` to both sides (e.g., to keep domain models free of mapping concerns), use the name-override attributes.
+
+### `[MapFrom("SourcePropertyName")]`
+
+Apply on a **destination** property. Tells MappShark to read from the named source property instead of looking for a same-named one.
+
+```csharp
+public class OrderDto
+{
+    public int Id { get; set; }
+
+    [MapFrom("TotalAmount")]   // read from OrderEntity.TotalAmount
+    public decimal Total { get; set; }
+}
+
+public class OrderEntity
+{
+    public int Id { get; set; }
+    public decimal TotalAmount { get; set; }  // no annotation needed here
+}
+
+var dto = Mapper.Map<OrderEntity, OrderDto>(entity);
+// dto.Total == entity.TotalAmount
+```
+
+### `[MapTo("DestinationPropertyName")]`
+
+Apply on a **source** property. Tells MappShark to write its value into the named destination property.
+
+```csharp
+public class CreateOrderCommand
+{
+    public string Reference { get; set; } = string.Empty;
+
+    [MapTo("Price")]           // write into OrderDto.Price
+    public decimal Amount { get; set; }
+}
+
+public class OrderDto
+{
+    public string Reference { get; set; } = string.Empty;
+    public decimal Price { get; set; }    // no annotation needed here
+}
+
+var dto = Mapper.Map<CreateOrderCommand, OrderDto>(command);
+// dto.Price == command.Amount
+```
+
+### Priority order
+
+When multiple strategies could resolve the same destination property, MappShark uses the following priority:
+
+1. `[MapIndex]` — highest priority, always wins
+2. `[MapFrom]` on the destination property
+3. `[MapTo]` on the source property
+4. Same-name fallback — lowest priority
+
+### Reverse mapping (`BothWays`)
+
+Each mapping direction is resolved independently. Annotate the type that is the destination in each direction:
+
+```csharp
+public class ProductEntity
+{
+    public string Code { get; set; } = string.Empty;
+
+    [MapFrom("Price")]          // when ProductEntity is destination: read from ProductDto.Price
+    public decimal UnitPrice { get; set; }
+}
+
+public class ProductDto
+{
+    public string Code { get; set; } = string.Empty;
+
+    [MapFrom("UnitPrice")]      // when ProductDto is destination: read from ProductEntity.UnitPrice
+    public decimal Price { get; set; }
+}
+
+var dto    = Mapper.BothWays<ProductEntity, ProductDto>(entity);
+var entity = Mapper.Map<ProductDto, ProductEntity>(dto);
+```
+
+> **Constraints:**
+> - `[MapFrom]` and `[MapIndex]` cannot be combined on the same property (`MSP015`).
+> - `[MapTo]` and `[MapIndex]` cannot be combined on the same property (`MSP016`).
+> - If the source property named in `[MapFrom]` does not exist, the build fails with `MSP014`.
+
+---
+
 ## Nested Objects
 
 MappShark automatically handles nested objects. Just call `Mapper.Map` once for the top-level type — the generator discovers and wires up all required nested pairs.
@@ -287,6 +378,9 @@ MappShark reports configuration problems as **compiler errors or warnings** — 
 | `MSP011` | Error | Destination collection type is not supported |
 | `MSP012` | Error | Destination nested/element type has no public parameterless constructor |
 | `MSP013` | Warning | Property with `[MapConverter]` is excluded from IQueryable projections |
+| `MSP014` | Error | `[MapFrom]` references a source property that does not exist |
+| `MSP015` | Error | `[MapFrom]` and `[MapIndex]` cannot be used on the same property |
+| `MSP016` | Error | `[MapTo]` and `[MapIndex]` cannot be used on the same property |
 
 ---
 

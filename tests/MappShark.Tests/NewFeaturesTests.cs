@@ -87,6 +87,108 @@ public sealed class NewFeaturesTests
         Assert.NotNull(profile);
     }
 
+    // ---------- Feature 5: [MapFrom] and [MapTo] ----------
+
+    [Fact]
+    public void MapFrom_MapsSourcePropertyByName_ToDifferentNamedDestination()
+    {
+        var source = new OrderSource { Id = 1, TotalAmount = 99.50m };
+        var dest = Mapper.Map<OrderSource, OrderDestination>(source);
+
+        Assert.Equal(1, dest.Id);
+        Assert.Equal(99.50m, dest.Total); // TotalAmount → Total via [MapFrom]
+    }
+
+    [Fact]
+    public void MapTo_MapsSourcePropertyByName_ToDifferentNamedDestination()
+    {
+        var source = new CommandSource { Reference = "CMD-001", Amount = 42.00m };
+        var dest = Mapper.Map<CommandSource, CommandDestination>(source);
+
+        Assert.Equal("CMD-001", dest.Reference);
+        Assert.Equal(42.00m, dest.Price); // Amount → Price via [MapTo]
+    }
+
+    [Fact]
+    public void MapFrom_TakesPriorityOverNameFallback()
+    {
+        // OrderOverride has a Name property in source, but [MapFrom("Title")] on dest
+        var source = new OverrideSource { Name = "should-be-ignored", Title = "correct-value" };
+        var dest = Mapper.Map<OverrideSource, OverrideDestination>(source);
+
+        Assert.Equal("correct-value", dest.Name); // [MapFrom("Title")] wins over same-name "Name"
+    }
+
+    [Fact]
+    public void BothWays_MapFrom_WorksInBothDirections()
+    {
+        // Forward: ProductSource → ProductDto
+        var source = new ProductSource { Code = "P001", UnitPrice = 19.99m };
+        var dto = Mapper.BothWays<ProductSource, ProductDto>(source);
+        Assert.Equal("P001", dto.Code);
+        Assert.Equal(19.99m, dto.Price); // UnitPrice → Price via [MapFrom("UnitPrice")] on ProductDto
+
+        // Reverse: ProductDto → ProductSource
+        var backSource = Mapper.BothWays<ProductDto, ProductSource>(dto);
+        Assert.Equal("P001", backSource.Code);
+        Assert.Equal(19.99m, backSource.UnitPrice); // Price → UnitPrice via [MapFrom("Price")] on ProductSource
+    }
+
+    // ---------- Test types for [MapFrom]/[MapTo] ----------
+
+    private sealed class OrderSource
+    {
+        public int Id { get; set; }
+        public decimal TotalAmount { get; set; }
+    }
+
+    private sealed class OrderDestination
+    {
+        public int Id { get; set; }
+        [MapFrom("TotalAmount")]
+        public decimal Total { get; set; }
+    }
+
+    private sealed class CommandSource
+    {
+        public string Reference { get; set; } = string.Empty;
+        [MapTo("Price")]
+        public decimal Amount { get; set; }
+    }
+
+    private sealed class CommandDestination
+    {
+        public string Reference { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+    }
+
+    private sealed class OverrideSource
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+    }
+
+    private sealed class OverrideDestination
+    {
+        [MapFrom("Title")]
+        public string Name { get; set; } = string.Empty;
+    }
+
+    private sealed class ProductSource
+    {
+        public string Code { get; set; } = string.Empty;
+        // When ProductSource is the destination (reverse BothWays), read from ProductDto.Price
+        [MapFrom("Price")]
+        public decimal UnitPrice { get; set; }
+    }
+
+    private sealed class ProductDto
+    {
+        public string Code { get; set; } = string.Empty;
+        [MapFrom("UnitPrice")]
+        public decimal Price { get; set; }
+    }
+
     // ---------- Test types ----------
 
     private sealed class PersonSource

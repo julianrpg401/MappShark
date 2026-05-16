@@ -138,7 +138,36 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         isEnabledByDefault: true,
         description: "Properties with [MapConverter] cannot be translated to expression trees and are excluded from IQueryable projections.");
 
+    private const string MapFromAttributeMetadataName = "MappShark.MapFromAttribute";
+    private const string MapToAttributeMetadataName = "MappShark.MapToAttribute";
     private const string MappSharkProfileMetadataName = "MappShark.MappSharkProfile";
+
+    private static readonly DiagnosticDescriptor MapFromSourceNotFoundDescriptor = new(
+        id: "MSP014",
+        title: "[MapFrom] source property not found",
+        messageFormat: "Destination property '{0}' uses [MapFrom(\"{1}\")] but source type '{2}' has no accessible property with that name.",
+        category: "MappShark",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "The property name in [MapFrom] must match a readable public property on the source type.");
+
+    private static readonly DiagnosticDescriptor MapFromIndexConflictDescriptor = new(
+        id: "MSP015",
+        title: "[MapFrom] conflicts with [MapIndex]",
+        messageFormat: "Property '{0}.{1}' has both [MapFrom] and [MapIndex]. Use only one — [MapIndex] for indexed mapping, [MapFrom] for name-override mapping.",
+        category: "MappShark",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "A property cannot use both [MapIndex] and [MapFrom] simultaneously.");
+
+    private static readonly DiagnosticDescriptor MapToIndexConflictDescriptor = new(
+        id: "MSP016",
+        title: "[MapTo] conflicts with [MapIndex]",
+        messageFormat: "Property '{0}.{1}' has both [MapTo] and [MapIndex]. Use only one — [MapIndex] for indexed mapping, [MapTo] for name-override mapping.",
+        category: "MappShark",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "A property cannot use both [MapIndex] and [MapTo] simultaneously.");
 
     private static readonly SymbolDisplayFormat FullyQualifiedTypeFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
@@ -328,6 +357,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         var mapConverterAttributeSymbol = compilation.GetTypeByMetadataName(MapConverterAttributeMetadataName);
         var mapValueConverterInterfaceSymbol = compilation.GetTypeByMetadataName(MapValueConverterInterfaceMetadataName);
         var listTypeSymbol = compilation.GetTypeByMetadataName(ListTypeMetadataName);
+        var mapFromAttributeSymbol = compilation.GetTypeByMetadataName(MapFromAttributeMetadataName);
+        var mapToAttributeSymbol = compilation.GetTypeByMetadataName(MapToAttributeMetadataName);
 
         var pairs = new Dictionary<TypePair, MapPairContext>(TypePairComparer.Instance);
         var pendingPairs = new Queue<MapPairContext>();
@@ -360,6 +391,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                 mapConverterAttributeSymbol,
                 mapValueConverterInterfaceSymbol,
                 listTypeSymbol,
+                mapFromAttributeSymbol,
+                mapToAttributeSymbol,
                 pair,
                 context,
                 discoveredDependencies,
@@ -438,6 +471,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         INamedTypeSymbol? mapConverterAttributeSymbol,
         INamedTypeSymbol? mapValueConverterInterfaceSymbol,
         INamedTypeSymbol? listTypeSymbol,
+        INamedTypeSymbol? mapFromAttributeSymbol,
+        INamedTypeSymbol? mapToAttributeSymbol,
         MapPairContext pair,
         SourceProductionContext context,
         HashSet<TypePair> discoveredDependencies,
@@ -514,7 +549,63 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             destinationMappedNames.Add(destinationProperty.Name);
         }
 
-        // Name-based fallback: map non-indexed destination properties from same-named source properties
+        // Name-based fallback + [MapFrom]/[MapTo] overrides.
+        // Priority: [MapFrom] on dest > [MapTo] on source > same-name fallback.
+        // BothWays: each direction is a separate pair, so [MapFrom]/[MapTo] are resolved
+        // per-direction without ambiguity.
+
+        // mapFromOverrides: destPropName → sourcePropName (from [MapFrom] on destination properties)
+        var mapFromOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (mapFromAttributeSymbol is not null)
+        {
+            foreach (var destProp in pair.DestinationType.GetMembers().OfType<IPropertySymbol>()
+                .Where(p => !p.IsStatic))
+            {
+                if (!TryGetStringAttributeArg(destProp, mapFromAttributeSymbol, out var sourceName))
+                    continue;
+
+                if (destinationPropertiesByIndex.Values.Any(ip => SymbolEqualityComparer.Default.Equals(ip.Property, destProp)))
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        MapFromIndexConflictDescriptor,
+                        GetLocationOrFallback(destProp, pair.InvocationLocation),
+                        pair.DestinationType.ToDisplayString(),
+                        destProp.Name));
+                    hasErrors = true;
+                }
+                else
+                {
+                    mapFromOverrides[destProp.Name] = sourceName;
+                }
+            }
+        }
+
+        // mapToOverrides: destPropName → source property (from [MapTo] on source properties)
+        var mapToOverrides = new Dictionary<string, IPropertySymbol>(StringComparer.Ordinal);
+        if (mapToAttributeSymbol is not null)
+        {
+            foreach (var srcProp in pair.SourceType.GetMembers().OfType<IPropertySymbol>()
+                .Where(p => !p.IsStatic && p.GetMethod is not null && p.GetMethod.DeclaredAccessibility == Accessibility.Public))
+            {
+                if (!TryGetStringAttributeArg(srcProp, mapToAttributeSymbol, out var destName))
+                    continue;
+
+                if (sourcePropertiesByIndex.Values.Any(ip => SymbolEqualityComparer.Default.Equals(ip.Property, srcProp)))
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        MapToIndexConflictDescriptor,
+                        GetLocationOrFallback(srcProp, pair.InvocationLocation),
+                        pair.SourceType.ToDisplayString(),
+                        srcProp.Name));
+                    hasErrors = true;
+                }
+                else
+                {
+                    mapToOverrides[destName] = srcProp;
+                }
+            }
+        }
+
         var sourceByName = pair.SourceType.GetMembers().OfType<IPropertySymbol>()
             .Where(p => !p.IsStatic && p.GetMethod is not null && p.GetMethod.DeclaredAccessibility == Accessibility.Public
                         && !sourcePropertiesByIndex.Values.Any(sp => SymbolEqualityComparer.Default.Equals(sp.Property, p)))
@@ -526,10 +617,38 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             .Where(p => !p.IsStatic && p.SetMethod is not null && p.SetMethod.DeclaredAccessibility == Accessibility.Public
                         && !destinationMappedNames.Contains(p.Name)))
         {
-            if (!sourceByName.TryGetValue(destProperty.Name, out var srcProperty))
-                continue;
+            IPropertySymbol? srcProperty;
+            var isExplicitOverride = false;
 
-            var fakeSourceIndexed = new IndexedProperty(srcProperty, null);
+            if (mapFromOverrides.TryGetValue(destProperty.Name, out var fromSourceName))
+            {
+                // [MapFrom("X")] — explicit name override on destination property
+                if (!sourceByName.TryGetValue(fromSourceName, out srcProperty))
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        MapFromSourceNotFoundDescriptor,
+                        GetLocationOrFallback(destProperty, pair.InvocationLocation),
+                        destProperty.Name,
+                        fromSourceName,
+                        pair.SourceType.ToDisplayString()));
+                    hasErrors = true;
+                    continue;
+                }
+
+                isExplicitOverride = true;
+            }
+            else if (mapToOverrides.TryGetValue(destProperty.Name, out var srcFromMapTo))
+            {
+                // [MapTo("Y")] — explicit name override on source property
+                srcProperty = srcFromMapTo;
+                isExplicitOverride = true;
+            }
+            else if (!sourceByName.TryGetValue(destProperty.Name, out srcProperty))
+            {
+                continue;
+            }
+
+            var fakeSourceIndexed = new IndexedProperty(srcProperty!, null);
             var fakeDestIndexed = new IndexedProperty(destProperty, null);
 
             if (!TryBuildPropertyAssignment(
@@ -545,7 +664,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                 ref hasErrors,
                 out var fallbackAssignment))
             {
-                hasErrors = false; // name-based fallback failures are not errors
+                if (!isExplicitOverride)
+                    hasErrors = false; // name-based fallback failures are not errors
                 continue;
             }
 
@@ -1126,6 +1246,26 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         }
 
         return null;
+    }
+
+    private static bool TryGetStringAttributeArg(IPropertySymbol property, INamedTypeSymbol attributeSymbol, out string value)
+    {
+        foreach (var attributeData in property.GetAttributes())
+        {
+            if (!SymbolEqualityComparer.Default.Equals(attributeData.AttributeClass, attributeSymbol))
+                continue;
+
+            if (attributeData.ConstructorArguments.Length == 1
+                && attributeData.ConstructorArguments[0].Value is string s
+                && !string.IsNullOrWhiteSpace(s))
+            {
+                value = s;
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private static bool ImplementsConverterContract(

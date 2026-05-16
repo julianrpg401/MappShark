@@ -6,20 +6,22 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>0.2.0-preview.1</Version>
+    <Version>0.3.0-preview.1</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v0.3.0-preview.1
+- [MapFrom("SourceProp")]: apply on a destination property to read from a differently-named source property.
+- [MapTo("DestProp")]: apply on a source property to write to a differently-named destination property.
+- Both attributes keep the domain model clean — no MappShark references needed in the domain.
+- [MapFrom]/[MapTo] take priority over name-based fallback; conflicts with [MapIndex] are build errors (MSP015/MSP016).
+- BothWays: each direction resolves [MapFrom]/[MapTo] independently — no ambiguity.
+
 v0.2.0-preview.1
-- Name-based fallback: non-indexed properties with matching names are mapped automatically.
-- BothWays API: Mapper.BothWays&lt;T,D&gt;() generates mappers for both directions.
-- MapMany API: Mapper.MapMany&lt;T,D&gt;(collection) bulk-maps to List&lt;D&gt;.
-- IQueryable projections: Mapper.Projection&lt;T,D&gt;() returns a compile-time Expression for EF Core .Select().
-- Profiles: organize mappings in MappSharkProfile-derived classes with CreateMap&lt;T,D&gt;().
-- MSP013 warning for [MapConverter] properties excluded from projections.
+- Name-based fallback, BothWays, MapMany, IQueryable projections, Profiles, MSP013.
     </PackageReleaseNotes>
     <Description>Zero-overhead object mapper for .NET. Uses a Roslyn source generator to emit plain C# mappers at compile time — no reflection on the hot path, mapping errors as build errors, IQueryable projection support, name-based fallback, reverse mapping, and Native AOT friendly.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
