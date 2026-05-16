@@ -1,0 +1,56 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <PackageId>MappShark</PackageId>
+    <Version>0.2.0-preview.1</Version>
+    <Authors>Julian Garcia</Authors>
+    <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
+    <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
+    <PackageReleaseNotes>
+v0.2.0-preview.1
+- Name-based fallback: non-indexed properties with matching names are mapped automatically.
+- BothWays API: Mapper.BothWays&lt;T,D&gt;() generates mappers for both directions.
+- MapMany API: Mapper.MapMany&lt;T,D&gt;(collection) bulk-maps to List&lt;D&gt;.
+- IQueryable projections: Mapper.Projection&lt;T,D&gt;() returns a compile-time Expression for EF Core .Select().
+- Profiles: organize mappings in MappSharkProfile-derived classes with CreateMap&lt;T,D&gt;().
+- MSP013 warning for [MapConverter] properties excluded from projections.
+    </PackageReleaseNotes>
+    <Description>Zero-overhead object mapper for .NET. Uses a Roslyn source generator to emit plain C# mappers at compile time — no reflection on the hot path, mapping errors as build errors, IQueryable projection support, name-based fallback, reverse mapping, and Native AOT friendly.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>mapper;object-mapper;source-generator;roslyn;dto;mapping;dotnet;aot;ef-core;projection;performance</PackageTags>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="src\MappShark.Generator\MappShark.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="src\**\*.cs;tests\**\*.cs;benchmarks\**\*.cs" />
+    <None Remove="src\**" />
+    <None Remove="tests\**" />
+    <None Remove="benchmarks\**" />
+    <None Remove="nupkg-out\**" />
+    <EmbeddedResource Remove="src\**;tests\**;benchmarks\**" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="LICENSE" Pack="true" PackagePath="/" />
+    <None Include="src\MappShark.Generator\bin\$(Configuration)\netstandard2.0\MappShark.Generator.dll"
+          Pack="true"
+          PackagePath="analyzers/dotnet/cs"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

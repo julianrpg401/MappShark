@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/MappShark.Benchmarks/MappShark.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/MappShark.Generator/MappShark.Generator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MappShark.Tests/MappShark.Tests.csproj" />
+  </Folder>
+  <Project Path="MappShark.csproj" />
+</Solution>

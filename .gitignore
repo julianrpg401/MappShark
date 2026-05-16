@@ -1,0 +1,40 @@
+## Build outputs
+bin/
+obj/
+out/
+
+## NuGet packages (local cache)
+*.nupkg
+*.snupkg
+
+## BenchmarkDotNet artifacts
+BenchmarkDotNet.Artifacts/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Rider
+.idea/
+*.sln.iml
+
+## VS Code
+.vscode/
+!.vscode/extensions.json
+
+## Test results
+TestResults/
+coverage/
+*.trx
+*.coveragexml
+
+## OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Generated files
+*.g.cs
