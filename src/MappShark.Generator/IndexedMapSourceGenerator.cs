@@ -558,7 +558,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         var mapFromOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
         if (mapFromAttributeSymbol is not null)
         {
-            foreach (var destProp in pair.DestinationType.GetMembers().OfType<IPropertySymbol>()
+            foreach (var destProp in GetAllProperties(pair.DestinationType)
                 .Where(p => !p.IsStatic))
             {
                 if (!TryGetStringAttributeArg(destProp, mapFromAttributeSymbol, out var sourceName))
@@ -584,7 +584,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         var mapToOverrides = new Dictionary<string, IPropertySymbol>(StringComparer.Ordinal);
         if (mapToAttributeSymbol is not null)
         {
-            foreach (var srcProp in pair.SourceType.GetMembers().OfType<IPropertySymbol>()
+            foreach (var srcProp in GetAllProperties(pair.SourceType)
                 .Where(p => !p.IsStatic && p.GetMethod is not null && p.GetMethod.DeclaredAccessibility == Accessibility.Public))
             {
                 if (!TryGetStringAttributeArg(srcProp, mapToAttributeSymbol, out var destName))
@@ -606,14 +606,14 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             }
         }
 
-        var sourceByName = pair.SourceType.GetMembers().OfType<IPropertySymbol>()
+        var sourceByName = GetAllProperties(pair.SourceType)
             .Where(p => !p.IsStatic && p.GetMethod is not null && p.GetMethod.DeclaredAccessibility == Accessibility.Public
                         && !sourcePropertiesByIndex.Values.Any(sp => SymbolEqualityComparer.Default.Equals(sp.Property, p)))
             .ToDictionary(p => p.Name, StringComparer.Ordinal);
 
         var nextFallbackIndex = (destinationPropertiesByIndex.Count > 0 ? destinationPropertiesByIndex.Keys.Max() : -1) + 1;
 
-        foreach (var destProperty in pair.DestinationType.GetMembers().OfType<IPropertySymbol>()
+        foreach (var destProperty in GetAllProperties(pair.DestinationType)
             .Where(p => !p.IsStatic && p.SetMethod is not null && p.SetMethod.DeclaredAccessibility == Accessibility.Public
                         && !destinationMappedNames.Contains(p.Name)))
         {
@@ -1113,6 +1113,22 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         return $"{sourceAccess} == null ? null : {sourceAccess}.Select(static __e => ProjectKnown<{srcElemFqn}, {dstElemFqn}>(__e)).ToList()";
     }
 
+    private static IEnumerable<IPropertySymbol> GetAllProperties(ITypeSymbol type)
+    {
+        var current = type;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (current is INamedTypeSymbol namedType)
+        {
+            foreach (var member in namedType.GetMembers().OfType<IPropertySymbol>())
+            {
+                // Derived-class declaration takes priority; skip base-class duplicate names.
+                if (seen.Add(member.Name))
+                    yield return member;
+            }
+            current = namedType.BaseType;
+        }
+    }
+
     private static Dictionary<int, IndexedProperty> CollectIndexedProperties(
         ITypeSymbol type,
         INamedTypeSymbol mapIndexAttributeSymbol,
@@ -1126,7 +1142,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
     {
         var indexedProperties = new Dictionary<int, IndexedProperty>();
 
-        foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
+        foreach (var property in GetAllProperties(type))
         {
             if (!TryGetMapIndex(property, mapIndexAttributeSymbol, out var index))
             {

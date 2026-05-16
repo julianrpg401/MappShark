@@ -6,13 +6,17 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>0.3.0-preview.1</Version>
+    <Version>0.3.0-preview.2</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v0.3.0-preview.2
+- Fix: [MapFrom]/[MapTo] and name-based fallback now correctly resolve properties inherited from base classes.
+- Fix: [MapIndex] on base class properties is now discovered by the source generator.
+
 v0.3.0-preview.1
 - [MapFrom("SourceProp")]: apply on a destination property to read from a differently-named source property.
 - [MapTo("DestProp")]: apply on a source property to write to a differently-named destination property.
