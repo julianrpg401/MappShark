@@ -6,13 +6,18 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>0.3.0-preview.2</Version>
+    <Version>0.3.0-preview.3</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v0.3.0-preview.3
+- Records and init-only properties: the source generator now emits object-initializer syntax for destination types that have init-only setters (e.g., record { get; init; }).
+- Positional records (no parameterless constructor) automatically fall back to the reflection mapper — no configuration needed.
+- [MapFrom] / [MapTo] work seamlessly with init-only destination properties.
+
 v0.3.0-preview.2
 - Fix: [MapFrom]/[MapTo] and name-based fallback now correctly resolve properties inherited from base classes.
 - Fix: [MapIndex] on base class properties is now discovered by the source generator.

@@ -88,6 +88,19 @@ private static UserDto MapPair_0(UserEntity source)
 
 At runtime, `Mapper.Map` resolves to this method via a cached static delegate. **Zero reflection. Zero allocations beyond the destination object itself.**
 
+For destination types with `init`-only properties (e.g., records), the generator emits object-initializer syntax instead:
+
+```csharp
+private static UserDto MapPair_0(UserEntity source)
+{
+    return new UserDto
+    {
+        UserId = source.Id,
+        Name   = source.FullName,
+    };
+}
+```
+
 ---
 
 ## Name-Based Fallback
@@ -204,6 +217,67 @@ var entity = Mapper.Map<ProductDto, ProductEntity>(dto);
 > - `[MapFrom]` and `[MapIndex]` cannot be combined on the same property (`MSP015`).
 > - `[MapTo]` and `[MapIndex]` cannot be combined on the same property (`MSP016`).
 > - If the source property named in `[MapFrom]` does not exist, the build fails with `MSP014`.
+
+---
+
+## Records and Init-Only Properties
+
+MappShark fully supports C# **records** and any class or struct with `init`-only setters — no extra configuration needed.
+
+### Records with explicit properties
+
+If every `init` property has a **public parameterless constructor** (the default for `record` types with explicit properties), the source generator emits an object-initializer method:
+
+```csharp
+public class OrderEntity
+{
+    public int Id { get; set; }
+    public decimal TotalAmount { get; set; }
+    public string CustomerName { get; set; } = string.Empty;
+}
+
+public record OrderDto
+{
+    public int Id { get; init; }
+
+    [MapFrom("TotalAmount")]
+    public decimal Total { get; init; }
+
+    [MapFrom("CustomerName")]
+    public string Customer { get; init; } = string.Empty;
+}
+
+var dto = Mapper.Map<OrderEntity, OrderDto>(entity);
+// dto.Total    == entity.TotalAmount
+// dto.Customer == entity.CustomerName
+```
+
+Generated code uses object-initializer syntax, which is the only way to assign `init` properties after construction:
+
+```csharp
+private static OrderDto MapPair_0(OrderEntity source)
+{
+    return new OrderDto
+    {
+        Id = source.Id,
+        Total = source.TotalAmount,
+        Customer = source.CustomerName,
+    };
+}
+```
+
+### Positional records
+
+Positional records (`record Foo(int Bar)`) have **no parameterless constructor**, so object-initializer syntax cannot be used. The source generator detects this and falls back to the **reflection mapper** automatically — no extra configuration needed.
+
+```csharp
+// Positional record → handled by the reflection fallback, not the generator.
+public record PointDto(double X, double Y);
+
+var dto = Mapper.Map<PointEntity, PointDto>(entity); // works fine
+```
+
+> **Tip:** To keep the generated hot path for record types, prefer records with explicit `{ get; init; }` properties over positional syntax.
 
 ---
 

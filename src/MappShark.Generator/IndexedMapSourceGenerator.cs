@@ -678,11 +678,21 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             return false;
         }
 
+        var useObjectInitializer = assignments.Any(a => a.IsInitOnly);
+        // Positional records: init-only properties but no parameterless constructor.
+        // Object initializer syntax requires new(), so skip generated code and let the reflection fallback handle them.
+        if (useObjectInitializer && !CanConstructDestinationType(pair.DestinationType))
+        {
+            generatedPair = null!;
+            return false;
+        }
+
         generatedPair = new GeneratedPair(
             key: pair.SourceType.ToDisplayString(FullyQualifiedTypeFormat) + "->" + pair.DestinationType.ToDisplayString(FullyQualifiedTypeFormat),
             sourceTypeName: pair.SourceType.ToDisplayString(FullyQualifiedTypeFormat),
             destinationTypeName: pair.DestinationType.ToDisplayString(FullyQualifiedTypeFormat),
-            assignments: assignments);
+            assignments: assignments,
+            useObjectInitializer: useObjectInitializer);
 
         // Build projection assignments (skip converter properties — they're not expression-tree compatible)
         generatedPair.ProjectionAssignments = BuildProjectionAssignments(pair, assignments, context);
@@ -706,6 +716,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         var sourceProperty = sourceIndexed.Property;
         var destinationProperty = destinationIndexed.Property;
         var sourceAccess = "source." + EscapeIdentifier(sourceProperty.Name);
+        var isInitOnly = destinationProperty.SetMethod?.IsInitOnly == true;
 
         if (destinationIndexed.ConverterType is not null)
         {
@@ -724,14 +735,14 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            assignment = new PropertyAssignment(index, destinationProperty.Name, converterExpression);
+            assignment = new PropertyAssignment(index, destinationProperty.Name, converterExpression, isInitOnly);
             return true;
         }
 
         var directConversion = compilation.ClassifyConversion(sourceProperty.Type, destinationProperty.Type);
         if (directConversion.Exists && directConversion.IsImplicit)
         {
-            assignment = new PropertyAssignment(index, destinationProperty.Name, sourceAccess);
+            assignment = new PropertyAssignment(index, destinationProperty.Name, sourceAccess, isInitOnly);
             return true;
         }
 
@@ -750,8 +761,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             out var inlineCollection))
         {
             assignment = inlineCollection is not null
-                ? new PropertyAssignment(index, destinationProperty.Name, collectionExpression, inlineCollection)
-                : new PropertyAssignment(index, destinationProperty.Name, collectionExpression);
+                ? new PropertyAssignment(index, destinationProperty.Name, collectionExpression, inlineCollection, isInitOnly)
+                : new PropertyAssignment(index, destinationProperty.Name, collectionExpression, isInitOnly);
             return true;
         }
 
@@ -772,7 +783,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             out var nestedExpression,
             out var nestedCandidate))
         {
-            assignment = new PropertyAssignment(index, destinationProperty.Name, nestedExpression);
+            assignment = new PropertyAssignment(index, destinationProperty.Name, nestedExpression, isInitOnly);
             return true;
         }
 
@@ -1683,67 +1694,99 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             builder.Append(pair.SourceTypeName);
             builder.AppendLine(" source)");
             builder.AppendLine("        {");
-            builder.Append("            var destination = new ");
-            builder.Append(pair.DestinationTypeName);
-            builder.AppendLine("();");
 
-            foreach (var assignment in pair.Assignments)
+            if (pair.UseObjectInitializer)
             {
-                // Inline List<T>→List<D> loop: eliminates per-element delegate call overhead
-                if (assignment.InlineCollection is { } inline)
+                // Object initializer syntax for init-only properties (records with explicit init setters).
+                // Inline-collection optimization is not used here — ValueExpression is always a single expression.
+                builder.Append("            return new ");
+                builder.AppendLine(pair.DestinationTypeName);
+                builder.AppendLine("            {");
+
+                foreach (var assignment in pair.Assignments)
                 {
-                    var lookupKey = $"MapKnown<{inline.SourceElemFqn}, {inline.DestElemFqn}>(";
-                    if (directCallMap.TryGetValue(lookupKey, out var elemMethodWithParen))
+                    builder.Append("                ");
+                    builder.Append(EscapeIdentifier(assignment.DestinationPropertyName));
+                    builder.Append(" = ");
+                    var valueExprInit = assignment.ValueExpression;
+                    foreach (var kv in directCallMap)
+                        valueExprInit = valueExprInit.Replace(kv.Key, kv.Value);
+                    foreach (var kv in directCallMap)
                     {
-                        var elemMethod = elemMethodWithParen.Substring(0, elemMethodWithParen.Length - 1);
-                        var propName = EscapeIdentifier(assignment.DestinationPropertyName);
-                        builder.AppendLine("            {");
-                        builder.AppendLine("                var __src = " + inline.SourceAccess + ";");
-                        builder.AppendLine("                if (__src is null)");
-                        builder.AppendLine("                {");
-                        builder.AppendLine("                    destination." + propName + " = null;");
-                        builder.AppendLine("                }");
-                        builder.AppendLine("                else");
-                        builder.AppendLine("                {");
-                        builder.AppendLine("                    var __result = new List<" + inline.DestElemFqn + ">(__src.Count);");
-                        builder.AppendLine("                    for (var __i = 0; __i < __src.Count; __i++)");
-                        builder.AppendLine("                    {");
-                        if (inline.ElemCanBeNull)
-                        {
-                            builder.AppendLine("                        var __elem = __src[__i];");
-                            builder.AppendLine("                        __result.Add(__elem is null ? default! : " + elemMethod + "(__elem));");
-                        }
-                        else
-                        {
-                            builder.AppendLine("                        __result.Add(" + elemMethod + "(__src[__i]));");
-                        }
-                        builder.AppendLine("                    }");
-                        builder.AppendLine("                    destination." + propName + " = __result;");
-                        builder.AppendLine("                }");
-                        builder.AppendLine("            }");
-                        continue;
+                        var methodRef = kv.Value.Substring(0, kv.Value.Length - 1);
+                        valueExprInit = valueExprInit.Replace("static item => " + methodRef + "(item)", methodRef);
                     }
+                    builder.Append(valueExprInit);
+                    builder.AppendLine(",");
                 }
 
-                builder.Append("            destination.");
-                builder.Append(EscapeIdentifier(assignment.DestinationPropertyName));
-                builder.Append(" = ");
-                var valueExpr = assignment.ValueExpression;
-                // Replace MapKnown<T,D>( with direct MapPair_N( calls
-                foreach (var kv in directCallMap)
-                    valueExpr = valueExpr.Replace(kv.Key, kv.Value);
-                // Simplify "static item => MapPair_N(item)" → "MapPair_N" (method group, no lambda wrapper)
-                foreach (var kv in directCallMap)
-                {
-                    var methodRef = kv.Value.Substring(0, kv.Value.Length - 1);
-                    valueExpr = valueExpr.Replace("static item => " + methodRef + "(item)", methodRef);
-                }
-                builder.Append(valueExpr);
-                builder.AppendLine(";");
+                builder.AppendLine("            };");
+                builder.AppendLine("        }");
             }
+            else
+            {
+                builder.Append("            var destination = new ");
+                builder.Append(pair.DestinationTypeName);
+                builder.AppendLine("();");
 
-            builder.AppendLine("            return destination;");
-            builder.AppendLine("        }");
+                foreach (var assignment in pair.Assignments)
+                {
+                    // Inline List<T>→List<D> loop: eliminates per-element delegate call overhead
+                    if (assignment.InlineCollection is { } inline)
+                    {
+                        var lookupKey = $"MapKnown<{inline.SourceElemFqn}, {inline.DestElemFqn}>(";
+                        if (directCallMap.TryGetValue(lookupKey, out var elemMethodWithParen))
+                        {
+                            var elemMethod = elemMethodWithParen.Substring(0, elemMethodWithParen.Length - 1);
+                            var propName = EscapeIdentifier(assignment.DestinationPropertyName);
+                            builder.AppendLine("            {");
+                            builder.AppendLine("                var __src = " + inline.SourceAccess + ";");
+                            builder.AppendLine("                if (__src is null)");
+                            builder.AppendLine("                {");
+                            builder.AppendLine("                    destination." + propName + " = null;");
+                            builder.AppendLine("                }");
+                            builder.AppendLine("                else");
+                            builder.AppendLine("                {");
+                            builder.AppendLine("                    var __result = new List<" + inline.DestElemFqn + ">(__src.Count);");
+                            builder.AppendLine("                    for (var __i = 0; __i < __src.Count; __i++)");
+                            builder.AppendLine("                    {");
+                            if (inline.ElemCanBeNull)
+                            {
+                                builder.AppendLine("                        var __elem = __src[__i];");
+                                builder.AppendLine("                        __result.Add(__elem is null ? default! : " + elemMethod + "(__elem));");
+                            }
+                            else
+                            {
+                                builder.AppendLine("                        __result.Add(" + elemMethod + "(__src[__i]));");
+                            }
+                            builder.AppendLine("                    }");
+                            builder.AppendLine("                    destination." + propName + " = __result;");
+                            builder.AppendLine("                }");
+                            builder.AppendLine("            }");
+                            continue;
+                        }
+                    }
+
+                    builder.Append("            destination.");
+                    builder.Append(EscapeIdentifier(assignment.DestinationPropertyName));
+                    builder.Append(" = ");
+                    var valueExpr = assignment.ValueExpression;
+                    // Replace MapKnown<T,D>( with direct MapPair_N( calls
+                    foreach (var kv in directCallMap)
+                        valueExpr = valueExpr.Replace(kv.Key, kv.Value);
+                    // Simplify "static item => MapPair_N(item)" → "MapPair_N" (method group, no lambda wrapper)
+                    foreach (var kv in directCallMap)
+                    {
+                        var methodRef = kv.Value.Substring(0, kv.Value.Length - 1);
+                        valueExpr = valueExpr.Replace("static item => " + methodRef + "(item)", methodRef);
+                    }
+                    builder.Append(valueExpr);
+                    builder.AppendLine(";");
+                }
+
+                builder.AppendLine("            return destination;");
+                builder.AppendLine("        }");
+            }
         }
 
         // Build direct-call map for projections (ProjectKnown<A,B>( → ProjectPair_N()
@@ -1967,7 +2010,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private sealed class GeneratedPair
     {
-        public GeneratedPair(string key, string sourceTypeName, string destinationTypeName, IReadOnlyList<PropertyAssignment> assignments)
+        public GeneratedPair(string key, string sourceTypeName, string destinationTypeName, IReadOnlyList<PropertyAssignment> assignments, bool useObjectInitializer = false)
         {
             Key = key;
             SourceTypeName = sourceTypeName;
@@ -1975,6 +2018,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             Assignments = assignments;
             ProjectionAssignments = null;
             MethodName = string.Empty;
+            UseObjectInitializer = useObjectInitializer;
         }
 
         public string Key { get; }
@@ -1984,6 +2028,9 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         public string DestinationTypeName { get; }
 
         public IReadOnlyList<PropertyAssignment> Assignments { get; }
+
+        /// <summary>True when any mapped destination property uses an init-only setter. The generated mapper method will use object-initializer syntax instead of post-construction assignment.</summary>
+        public bool UseObjectInitializer { get; }
 
         /// <summary>Projection assignments (excludes converter properties). Null means projection not generated.</summary>
         public IReadOnlyList<ProjectionAssignment>? ProjectionAssignments { get; set; }
@@ -2006,20 +2053,22 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private readonly struct PropertyAssignment
     {
-        public PropertyAssignment(int index, string destinationPropertyName, string valueExpression)
+        public PropertyAssignment(int index, string destinationPropertyName, string valueExpression, bool isInitOnly = false)
         {
             Index = index;
             DestinationPropertyName = destinationPropertyName;
             ValueExpression = valueExpression;
             InlineCollection = null;
+            IsInitOnly = isInitOnly;
         }
 
-        public PropertyAssignment(int index, string destinationPropertyName, string valueExpression, InlineCollectionData inlineCollection)
+        public PropertyAssignment(int index, string destinationPropertyName, string valueExpression, InlineCollectionData inlineCollection, bool isInitOnly = false)
         {
             Index = index;
             DestinationPropertyName = destinationPropertyName;
             ValueExpression = valueExpression;
             InlineCollection = inlineCollection;
+            IsInitOnly = isInitOnly;
         }
 
         public int Index { get; }
@@ -2029,6 +2078,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         public string ValueExpression { get; }
 
         public InlineCollectionData? InlineCollection { get; }
+
+        public bool IsInitOnly { get; }
     }
 
     private sealed class InlineCollectionData

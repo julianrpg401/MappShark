@@ -217,6 +217,46 @@ public sealed class NewFeaturesTests
         public string? Age { get; set; } // incompatible — int vs string
     }
 
+    // ---------- Feature 5: init-only properties (records with explicit init setters) ----------
+
+    [Fact]
+    public void InitOnly_Record_MapsViaReflectionFallback()
+    {
+        // Private record → generator skips it → reflection fallback handles init-only via SetValue
+        var source = new InitOnlySource { TotalAmount = 49.99m, Label = "Widget" };
+        var result = Mapper.Map<InitOnlySource, InitOnlyRecord>(source);
+        Assert.Equal(49.99m, result.TotalAmount);
+        Assert.Equal("Widget", result.Label);
+    }
+
+    [Fact]
+    public void InitOnly_Record_MapFrom_WorksViaReflectionFallback()
+    {
+        var source = new InitOnlySource { TotalAmount = 99.5m, Label = "Gadget" };
+        var result = Mapper.Map<InitOnlySource, InitOnlyRecordWithMapFrom>(source);
+        Assert.Equal(99.5m, result.Price);   // [MapFrom("TotalAmount")]
+        Assert.Equal("Gadget", result.Label);
+    }
+
+    private sealed class InitOnlySource
+    {
+        public decimal TotalAmount { get; set; }
+        public string Label { get; set; } = string.Empty;
+    }
+
+    private sealed record InitOnlyRecord
+    {
+        public decimal TotalAmount { get; init; }
+        public string Label { get; init; } = default!;
+    }
+
+    private sealed record InitOnlyRecordWithMapFrom
+    {
+        [MapFrom("TotalAmount")]
+        public decimal Price { get; init; }
+        public string Label { get; init; } = default!;
+    }
+
     private sealed class SampleProfile : MappSharkProfile
     {
         public SampleProfile()
