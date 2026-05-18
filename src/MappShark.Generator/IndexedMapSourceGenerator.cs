@@ -1284,6 +1284,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private static bool TryGetMapIndex(IPropertySymbol property, INamedTypeSymbol mapIndexAttributeSymbol, out int index)
     {
+        // Check property attributes first (handles [property: MapIndex(n)] and regular property usage)
         foreach (var attributeData in property.GetAttributes())
         {
             if (!SymbolEqualityComparer.Default.Equals(attributeData.AttributeClass, mapIndexAttributeSymbol))
@@ -1296,6 +1297,27 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             {
                 index = intValue;
                 return true;
+            }
+        }
+
+        // Fallback: for positional records, also check the corresponding constructor parameter.
+        // This enables [MapIndex(n)] directly on the parameter without the [property: ...] specifier.
+        var param = GetCorrespondingConstructorParameter(property);
+        if (param is not null)
+        {
+            foreach (var attributeData in param.GetAttributes())
+            {
+                if (!SymbolEqualityComparer.Default.Equals(attributeData.AttributeClass, mapIndexAttributeSymbol))
+                {
+                    continue;
+                }
+
+                if (attributeData.ConstructorArguments.Length == 1
+                    && attributeData.ConstructorArguments[0].Value is int paramIntValue)
+                {
+                    index = paramIntValue;
+                    return true;
+                }
             }
         }
 
@@ -1319,11 +1341,31 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             }
         }
 
+        // Fallback: for positional records, also check the corresponding constructor parameter.
+        var param = GetCorrespondingConstructorParameter(property);
+        if (param is not null)
+        {
+            foreach (var attributeData in param.GetAttributes())
+            {
+                if (!SymbolEqualityComparer.Default.Equals(attributeData.AttributeClass, mapConverterAttributeSymbol))
+                {
+                    continue;
+                }
+
+                if (attributeData.ConstructorArguments.Length == 1
+                    && attributeData.ConstructorArguments[0].Value is INamedTypeSymbol paramConverterType)
+                {
+                    return paramConverterType;
+                }
+            }
+        }
+
         return null;
     }
 
     private static bool TryGetStringAttributeArg(IPropertySymbol property, INamedTypeSymbol attributeSymbol, out string value)
     {
+        // Check property attributes first (handles [property: MapFrom/To("X")] and regular property usage)
         foreach (var attributeData in property.GetAttributes())
         {
             if (!SymbolEqualityComparer.Default.Equals(attributeData.AttributeClass, attributeSymbol))
@@ -1335,6 +1377,26 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             {
                 value = s;
                 return true;
+            }
+        }
+
+        // Fallback: for positional records, also check the corresponding constructor parameter.
+        // This enables [MapFrom("X")] / [MapTo("X")] directly on the parameter without [property: ...] specifier.
+        var param = GetCorrespondingConstructorParameter(property);
+        if (param is not null)
+        {
+            foreach (var attributeData in param.GetAttributes())
+            {
+                if (!SymbolEqualityComparer.Default.Equals(attributeData.AttributeClass, attributeSymbol))
+                    continue;
+
+                if (attributeData.ConstructorArguments.Length == 1
+                    && attributeData.ConstructorArguments[0].Value is string paramS
+                    && !string.IsNullOrWhiteSpace(paramS))
+                {
+                    value = paramS;
+                    return true;
+                }
             }
         }
 
@@ -1505,6 +1567,30 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             }
 
             return ctor;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// For a synthesized property of a positional record, returns the corresponding primary constructor parameter.
+    /// This enables reading attributes placed directly on the parameter (e.g. <c>[MapFrom("X")]</c>)
+    /// as a clean alternative to the explicit <c>[property: MapFrom("X")]</c> specifier.
+    /// Returns null if the property has no corresponding positional parameter.
+    /// </summary>
+    private static IParameterSymbol? GetCorrespondingConstructorParameter(IPropertySymbol property)
+    {
+        if (property.ContainingType is not INamedTypeSymbol containingType || !containingType.IsRecord)
+            return null;
+
+        var primaryCtor = GetPositionalRecordPrimaryConstructor(containingType);
+        if (primaryCtor is null)
+            return null;
+
+        foreach (var param in primaryCtor.Parameters)
+        {
+            if (string.Equals(param.Name, property.Name, StringComparison.OrdinalIgnoreCase))
+                return param;
         }
 
         return null;

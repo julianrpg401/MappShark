@@ -270,23 +270,37 @@ private static OrderDto MapPair_0(OrderEntity source)
 
 Positional records (`record Foo(int Bar)`) have **no parameterless constructor**. MappShark fully supports them via generated **constructor-call syntax** — no reflection fallback required.
 
-Use `[property: MapFrom("...")]` (or `[property: MapTo("...")]`, `[property: MapIndex(n)]`) on positional parameters to configure the mapping:
+All three mapping attributes — `[MapIndex]`, `[MapFrom]`, and `[MapTo]` — can be placed **directly on positional parameters**:
 
 ```csharp
 // All properties map by name — no attributes needed.
 public record PointDto(double X, double Y);
 
-// Remap a parameter using [property: MapFrom]
+// [MapFrom] directly on the parameter
 public record OrderDto(
     int Id,
-    [property: MapFrom("TotalAmount")] decimal Total,
-    [property: MapFrom("CustomerName")] string Customer
+    [MapFrom("TotalAmount")] decimal Total,
+    [MapFrom("CustomerName")] string Customer
 );
+
+// [MapIndex] on positional parameters — index-based mapping
+public record WidgetDto(
+    [MapIndex(0)] string SerialNumber,
+    [MapIndex(1)] int Version
+);
+
+// [MapTo] on the source — write into the named positional parameter
+public sealed class ContractCommand
+{
+    [MapTo("Title")] public string ContractName { get; set; } = string.Empty;
+    [MapTo("Value")] public decimal Amount { get; set; }
+}
+public record ContractDto(string Title, decimal Value);
 
 var dto = Mapper.Map<OrderEntity, OrderDto>(entity); // uses generated constructor-call code
 ```
 
-The source generator emits:
+The source generator emits constructor-call syntax:
 
 ```csharp
 private static OrderDto MapPair_N(OrderEntity source) =>
@@ -296,7 +310,7 @@ private static OrderDto MapPair_N(OrderEntity source) =>
         Customer: source.CustomerName);
 ```
 
-> **Note:** The `[property: ...]` target specifier is required because `MapFromAttribute` targets only `Property`. The C# compiler then forwards the attribute to the synthesized property where the generator picks it up.
+> **Note:** The `[property: ...]` target specifier (e.g. `[property: MapFrom("X")]`) is also accepted as an alternative syntax — both forms are equivalent.
 
 > **Limitation:** `Mapper.Projection<TSource, TDestination>()` (LINQ expression trees) is not supported for positional records — only `Mapper.Map` and `Mapper.MapMany`.
 

@@ -1,3 +1,4 @@
+using System;
 using MappShark;
 using Xunit;
 
@@ -39,13 +40,14 @@ public sealed record OrderSummaryDto
 }
 
 // Public positional records — generator should emit constructor-call syntax.
+// Attributes work directly on parameters without the [property: ...] specifier.
 public sealed class PersonInfo
 {
     public string FullName { get; set; } = string.Empty;
     public int Age { get; set; }
 }
 
-public sealed record PersonPositionalDto([property: MapFrom("FullName")] string Name, int Age);
+public sealed record PersonPositionalDto([MapFrom("FullName")] string Name, int Age);
 
 public sealed class ItemInfo
 {
@@ -54,7 +56,34 @@ public sealed class ItemInfo
     public int Quantity { get; set; }
 }
 
-public sealed record ItemPositionalDto(string Code, [property: MapFrom("Price")] decimal UnitPrice, int Quantity);
+public sealed record ItemPositionalDto(string Code, [MapFrom("Price")] decimal UnitPrice, int Quantity);
+
+// [MapIndex] on positional record parameters — both source and destination use index-based mapping.
+public sealed class WidgetInfo
+{
+    [MapIndex(0)] public string SerialNumber { get; set; } = string.Empty;
+    [MapIndex(1)] public int Version { get; set; }
+}
+
+public sealed record WidgetPositionalDto([MapIndex(0)] string SerialNumber, [MapIndex(1)] int Version);
+
+// [MapTo] on source properties → positional record destination (attribute lives on source, not on destination).
+public sealed class ContractInfo
+{
+    [MapTo("Title")] public string ContractName { get; set; } = string.Empty;
+    [MapTo("Value")] public decimal Amount { get; set; }
+}
+
+public sealed record ContractPositionalDto(string Title, decimal Value);
+
+// [MapTo] on a positional record's own parameters — the record itself is the SOURCE.
+public sealed record SourcePositionalRecord([MapTo("PublicId")] Guid Id, [MapTo("DisplayName")] string Name);
+
+public sealed class TargetFromPositionalDto
+{
+    public Guid PublicId { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+}
 
 /// <summary>
 /// Tests for init-only / record support via the generated code path.
@@ -146,5 +175,36 @@ public sealed class PositionalRecordGeneratorTests
         Assert.Equal(25, results[0].Age);
         Assert.Equal("Bob", results[1].Name);
         Assert.Equal(40, results[1].Age);
+    }
+
+    [Fact]
+    public void Map_PositionalRecord_MapIndex_OnParameter_MapsCorrectly()
+    {
+        var source = new WidgetInfo { SerialNumber = "SN-001", Version = 3 };
+        var result = Mapper.Map<WidgetInfo, WidgetPositionalDto>(source);
+
+        Assert.Equal("SN-001", result.SerialNumber); // [MapIndex(0)] on parameter
+        Assert.Equal(3, result.Version);             // [MapIndex(1)] on parameter
+    }
+
+    [Fact]
+    public void Map_PositionalRecord_MapTo_OnSourceProperty_MapsCorrectly()
+    {
+        var source = new ContractInfo { ContractName = "Service Agreement", Amount = 5000m };
+        var result = Mapper.Map<ContractInfo, ContractPositionalDto>(source);
+
+        Assert.Equal("Service Agreement", result.Title); // [MapTo("Title")] on source
+        Assert.Equal(5000m, result.Value);               // [MapTo("Value")] on source
+    }
+
+    [Fact]
+    public void Map_PositionalRecordAsSource_MapTo_OnParameter_MapsCorrectly()
+    {
+        var id = Guid.NewGuid();
+        var source = new SourcePositionalRecord(id, "Alice");
+        var result = Mapper.Map<SourcePositionalRecord, TargetFromPositionalDto>(source);
+
+        Assert.Equal(id, result.PublicId);     // [MapTo("PublicId")] on positional parameter Id
+        Assert.Equal("Alice", result.DisplayName); // [MapTo("DisplayName")] on positional parameter Name
     }
 }

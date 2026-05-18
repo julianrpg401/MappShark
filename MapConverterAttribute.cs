@@ -5,7 +5,7 @@ namespace MappShark;
 /// <summary>
 /// Configures a custom converter to map a destination property.
 /// </summary>
-[AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = true)]
 public sealed class MapConverterAttribute : Attribute
 {
     /// <summary>

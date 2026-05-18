@@ -17,7 +17,7 @@ namespace MappShark;
 /// }
 /// </code>
 /// </example>
-[AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = true)]
 public sealed class MapFromAttribute : Attribute
 {
     /// <summary>

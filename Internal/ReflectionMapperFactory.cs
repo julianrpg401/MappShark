@@ -59,8 +59,8 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
         var ctorParams = primaryCtor.GetParameters();
 
         // BuildPropertyPairs already resolves [MapFrom], [MapTo], name fallback and type conversion.
-        // For positional records, [MapFrom] on positional parameters is forwarded to the synthesized
-        // property by the C# compiler, so GetCustomAttribute works correctly.
+        // For positional records, [MapFrom] / [MapIndex] placed on positional parameters (without the
+        // [property: ...] specifier) are read from the constructor parameter via GetPositionalParameterAttribute.
         var allPairs = BuildPropertyPairs();
         var pairByDestName = allPairs.ToDictionary(p => p.Destination.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -142,11 +142,15 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
             .Where(p => p.GetMethod is not null && p.GetMethod.IsPublic && !sourceMappedByIndex.Contains(p.Name))
             .ToDictionary(p => p.Name, StringComparer.Ordinal);
 
-        // [MapFrom("X")] on destination property → destPropName → sourcePropName
+        // [MapFrom("X")] on destination property → destPropName → sourcePropName.
+        // For positional records, also check the corresponding constructor parameter
+        // because [MapFrom] placed directly on the parameter (without [property: ...]) is
+        // not forwarded to the synthesized property by the C# compiler.
         var mapFromOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var destProp in destinationType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
-            var mapFrom = destProp.GetCustomAttribute<MapFromAttribute>(inherit: true);
+            var mapFrom = destProp.GetCustomAttribute<MapFromAttribute>(inherit: true)
+                ?? GetPositionalParameterAttribute<MapFromAttribute>(destinationType, destProp.Name);
             if (mapFrom is not null && !destinationMappedByIndex.Contains(destProp.Name))
                 mapFromOverrides[destProp.Name] = mapFrom.PropertyName;
         }
@@ -156,7 +160,8 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
         foreach (var srcProp in sourceType.GetProperties(BindingFlags.Instance | BindingFlags.Public)
             .Where(p => p.GetMethod is not null && p.GetMethod.IsPublic && !sourceMappedByIndex.Contains(p.Name)))
         {
-            var mapTo = srcProp.GetCustomAttribute<MapToAttribute>(inherit: true);
+            var mapTo = srcProp.GetCustomAttribute<MapToAttribute>(inherit: true)
+                ?? GetPositionalParameterAttribute<MapToAttribute>(sourceType, srcProp.Name);
             if (mapTo is not null)
                 mapToOverrides[mapTo.PropertyName] = srcProp;
         }
@@ -224,7 +229,9 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
 
         foreach (var property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
-            var index = property.GetCustomAttribute<MapIndexAttribute>(inherit: true)?.Index;
+            // Also check the corresponding constructor parameter for positional records.
+            var index = (property.GetCustomAttribute<MapIndexAttribute>(inherit: true)
+                ?? GetPositionalParameterAttribute<MapIndexAttribute>(type, property.Name))?.Index;
             if (index is null)
             {
                 continue;
@@ -254,7 +261,10 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
 
         foreach (var property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
-            var index = property.GetCustomAttribute<MapIndexAttribute>(inherit: true)?.Index;
+            // Also check the corresponding constructor parameter for positional records:
+            // [MapIndex] placed directly on the parameter is not forwarded to the synthesized property.
+            var index = (property.GetCustomAttribute<MapIndexAttribute>(inherit: true)
+                ?? GetPositionalParameterAttribute<MapIndexAttribute>(type, property.Name))?.Index;
             if (index is null)
             {
                 continue;
@@ -272,7 +282,8 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
                     $"Duplicate [MapIndex({index.Value})] found in destination type '{type.FullName}'.");
             }
 
-            var converterType = property.GetCustomAttribute<MapConverterAttribute>(inherit: true)?.ConverterType;
+            var converterType = (property.GetCustomAttribute<MapConverterAttribute>(inherit: true)
+                ?? GetPositionalParameterAttribute<MapConverterAttribute>(type, property.Name))?.ConverterType;
             result.Add(index.Value, new DestinationPropertyMetadata(property, converterType));
         }
 
@@ -568,5 +579,38 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
         public PropertyInfo Destination { get; }
 
         public Func<object?, object?> Converter { get; }
+    }
+
+    /// <summary>
+    /// Returns the attribute of type <typeparamref name="T"/> from the primary constructor parameter
+    /// that corresponds to the named property. Used to support attributes placed directly on
+    /// positional record parameters (e.g. <c>[MapFrom("X")]</c>) without the <c>[property: ...]</c> specifier.
+    /// Returns null if the type has no suitable primary constructor or no matching parameter.
+    /// </summary>
+    private static T? GetPositionalParameterAttribute<T>(Type type, string propertyName) where T : Attribute
+    {
+        var primaryCtor = GetReflectionPrimaryConstructor(type);
+        return primaryCtor?
+            .GetParameters()
+            .FirstOrDefault(p => string.Equals(p.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            ?.GetCustomAttribute<T>(inherit: true);
+    }
+
+    /// <summary>
+    /// Returns the primary constructor of a type: the public constructor with more than zero parameters
+    /// that is not the record copy constructor (a single parameter of the same type).
+    /// Returns null if no such constructor exists.
+    /// </summary>
+    private static ConstructorInfo? GetReflectionPrimaryConstructor(Type type)
+    {
+        return type
+            .GetConstructors(BindingFlags.Instance | BindingFlags.Public)
+            .Where(c =>
+            {
+                var p = c.GetParameters();
+                return p.Length > 0 && !(p.Length == 1 && p[0].ParameterType == type);
+            })
+            .OrderByDescending(c => c.GetParameters().Length)
+            .FirstOrDefault();
     }
 }

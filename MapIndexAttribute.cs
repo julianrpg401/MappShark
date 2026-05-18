@@ -5,7 +5,7 @@ namespace MappShark;
 /// <summary>
 /// Marks a property with an explicit mapping index.
 /// </summary>
-[AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = true)]
 public sealed class MapIndexAttribute : Attribute
 {
     /// <summary>
