@@ -65,14 +65,16 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
         var pairByDestName = allPairs.ToDictionary(p => p.Destination.Name, StringComparer.OrdinalIgnoreCase);
 
         // Positional args: one per constructor parameter, resolved by parameter name.
+        // Parameters with no matching source property are treated as "orphan" — their constructor slot
+        // receives the CLR default for that type (null for reference types, default(T) for value types).
+        // This mirrors the behaviour of the parameterless-constructor path, which simply skips properties
+        // that have no source counterpart.
         var positionalPairs = ctorParams.Select(param =>
         {
             if (!pairByDestName.TryGetValue(param.Name!, out var pair))
-                throw new InvalidOperationException(
-                    $"Cannot map constructor parameter '{param.Name}' of '{destinationType.FullName}': " +
-                    "no matching source property found. Add [MapFrom] or ensure names match.");
+                return (PropertyPair?)null; // orphan parameter — will receive default value
             pairByDestName.Remove(param.Name!); // remove so it's not set again via SetValue
-            return pair;
+            return (PropertyPair?)pair;
         }).ToArray();
 
         // Remaining pairs: non-positional init properties that can be set via SetValue after construction.
@@ -83,8 +85,17 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
             var args = new object?[ctorParams.Length];
             for (var i = 0; i < ctorParams.Length; i++)
             {
-                var value = positionalPairs[i].Source.GetValue(source);
-                args[i] = positionalPairs[i].Converter(value);
+                if (positionalPairs[i] is { } pair)
+                {
+                    var value = pair.Source.GetValue(source);
+                    args[i] = pair.Converter(value);
+                }
+                else
+                {
+                    // Orphan parameter: no source mapping. Use CLR default (null / default(T)).
+                    var paramType = ctorParams[i].ParameterType;
+                    args[i] = paramType.IsValueType ? Activator.CreateInstance(paramType) : null;
+                }
             }
 
             var destination = (TDestination)primaryCtor.Invoke(args);

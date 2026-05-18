@@ -7,13 +7,19 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.2</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v1.0.2
+- Fix: positional record parameters that have no matching source property ("orphan" parameters) are now correctly skipped during reflection-based mapping — their constructor slot receives the CLR default value (null / default(T)) instead of throwing InvalidOperationException at runtime. This restores the intended behaviour where only annotated parameters are mapped and unannotated ones are left as developer-supplied defaults.
+
+v1.0.1
+- Added package icon.
+
 v1.0.0
 - First stable release of MappShark.
 - Roslyn source generator emits zero-reflection mappers at compile time.

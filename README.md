@@ -314,6 +314,33 @@ private static OrderDto MapPair_N(OrderEntity source) =>
 
 > **Limitation:** `Mapper.Projection<TSource, TDestination>()` (LINQ expression trees) is not supported for positional records — only `Mapper.Map` and `Mapper.MapMany`.
 
+#### Orphan parameters
+
+Positional parameters that have **no matching source property** — no `[MapFrom]`/`[MapTo]`/`[MapIndex]` annotation and no same-name source property — are treated as *orphans* and silently skipped. Their constructor slot receives the CLR default (`null` for reference types, `default(T)` for value types). This lets you include extra parameters in the record that carry response-specific data you set yourself after mapping:
+
+```csharp
+public class UserEntity
+{
+    public Guid PublicId { get; set; }
+    public string UserName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    // No VerificationRequired property
+}
+
+public sealed record RegisterUserResponseDto(
+    [MapFrom("PublicId")]  Guid   UserId,
+    [MapFrom("UserName")]  string UserName,
+    [MapFrom("Email")]     string Email,
+    bool VerificationRequired   // orphan — no source property, defaults to false
+);
+
+var dto = Mapper.Map<UserEntity, RegisterUserResponseDto>(entity);
+// dto.UserId              == entity.PublicId
+// dto.UserName            == entity.UserName
+// dto.Email               == entity.Email
+// dto.VerificationRequired == false  ← CLR default; set it yourself afterward
+```
+
 ---
 
 ## Nested Objects
