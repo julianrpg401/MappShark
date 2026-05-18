@@ -580,8 +580,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             }
         }
 
-        // mapToOverrides: destPropName → source property (from [MapTo] on source properties)
-        var mapToOverrides = new Dictionary<string, IPropertySymbol>(StringComparer.Ordinal);
+        // mapToOverrides: destPropName → (source property, optional converter) (from [MapTo] on source properties)
+        var mapToOverrides = new Dictionary<string, (IPropertySymbol Property, INamedTypeSymbol? ConverterType)>(StringComparer.Ordinal);
         if (mapToAttributeSymbol is not null)
         {
             foreach (var srcProp in GetAllProperties(pair.SourceType)
@@ -601,7 +601,10 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                 }
                 else
                 {
-                    mapToOverrides[destName] = srcProp;
+                    var srcConverterType = mapConverterAttributeSymbol is not null
+                        ? TryGetMapConverterType(srcProp, mapConverterAttributeSymbol)
+                        : null;
+                    mapToOverrides[destName] = (srcProp, srcConverterType);
                 }
             }
         }
@@ -618,6 +621,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                         && !destinationMappedNames.Contains(p.Name)))
         {
             IPropertySymbol? srcProperty;
+            INamedTypeSymbol? mapToConverterType = null;
             var isExplicitOverride = false;
 
             if (mapFromOverrides.TryGetValue(destProperty.Name, out var fromSourceName))
@@ -637,10 +641,11 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
                 isExplicitOverride = true;
             }
-            else if (mapToOverrides.TryGetValue(destProperty.Name, out var srcFromMapTo))
+            else if (mapToOverrides.TryGetValue(destProperty.Name, out var mapToEntry))
             {
                 // [MapTo("Y")] — explicit name override on source property
-                srcProperty = srcFromMapTo;
+                srcProperty = mapToEntry.Property;
+                mapToConverterType = mapToEntry.ConverterType;
                 isExplicitOverride = true;
             }
             else if (!sourceByName.TryGetValue(destProperty.Name, out srcProperty))
@@ -649,7 +654,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             }
 
             var fakeSourceIndexed = new IndexedProperty(srcProperty!, null);
-            var fakeDestIndexed = new IndexedProperty(destProperty, null);
+            var fakeDestIndexed = new IndexedProperty(destProperty, mapToConverterType);
 
             if (!TryBuildPropertyAssignment(
                 compilation,

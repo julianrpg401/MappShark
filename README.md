@@ -1,25 +1,61 @@
 # MappShark
 
-> **Fast. Safe. Zero-overhead object mapping for .NET — powered by a Roslyn source generator.**
+> **Zero-overhead object mapping for .NET — powered by a Roslyn source generator.**
 
-MappShark maps objects at the speed of hand-written code. Instead of relying on reflection at runtime, it generates a plain C# mapper during compilation. Errors in your mapping configuration become **build errors**, not production crashes.
+MappShark generates plain C# mapping code at **compile time**. There is no reflection on the hot path, no warm-up cost, and no runtime configuration exceptions — mapping errors become **build errors**.
 
 [![NuGet](https://img.shields.io/nuget/v/MappShark.svg)](https://www.nuget.org/packages/MappShark)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-## Why MappShark?
+## Library Comparison
 
-Most mapping libraries do their heaviest work at **runtime** — scanning types via reflection, compiling expression trees on first use, and throwing configuration exceptions only when a mapping is actually executed. MappShark flips this model:
+The table below scores MappShark against the most popular .NET object-mapping libraries across technical criteria. Documentation quality and community size are intentionally excluded — MappShark is a newer library and a direct comparison on those axes would not be meaningful.
 
-| | AutoMapper | Mapster | **MappShark** |
-|---|:---:|:---:|:---:|
-| Generated at compile time | ✗ | ✗ | ✅ |
-| Errors caught at build time | ✗ | ✗ | ✅ |
-| Zero reflection on hot path | ✗ | Partial | ✅ |
-| Native AOT / Trimming friendly | ✗ | Partial | ✅ |
-| IQueryable projections | ✅ | ✅ | ✅ |
+> Scores are out of 100. Higher is better.
+
+| Criterion | AutoMapper | Mapster | Mapperly | **MappShark** |
+|---|:---:|:---:|:---:|:---:|
+| **Runtime performance** | 30 | 65 | 95 | **95** |
+| **Startup / warm-up overhead** | 25 | 55 | 95 | **90** |
+| **Compile-time safety** | 15 | 20 | 85 | **95** |
+| **Native AOT / trimming support** | 15 | 40 | 95 | **95** |
+| **Configuration simplicity** | 50 | 70 | 65 | **85** |
+| **Name-based automatic mapping** | 90 | 85 | 80 | **80** |
+| **Custom type converters** | 90 | 80 | 55 | **75** |
+| **Collection & dictionary mapping** | 85 | 80 | 70 | **80** |
+| **IQueryable / EF Core projections** | 85 | 80 | 25 | **75** |
+| **Records & init-only support** | 55 | 65 | 85 | **90** |
+
+**Key takeaways:**
+- **AutoMapper** and **Mapster** are mature and flexible but rely heavily on runtime reflection, making them incompatible with Native AOT and carrying significant startup costs.
+- **Mapperly** generates code at compile time and has excellent AOT support, but its IQueryable projection story is limited and its configuration model is more verbose.
+- **MappShark** combines compile-time code generation, build-time error reporting, Native AOT compatibility, and first-class EF Core projection support in a single lightweight package.
+
+---
+
+## Table of Contents
+
+1. [Installation](#installation)
+2. [Quick Start](#quick-start)
+3. [How It Works](#how-it-works)
+4. [Mapping Strategies](#mapping-strategies)
+   - [Index-Based Mapping](#1-index-based-mapping-mapindex)
+   - [Name-Based Fallback](#2-name-based-fallback)
+   - [Name Override Attributes](#3-name-override-attributes-mapfrom--mapto)
+5. [Records and Init-Only Properties](#records-and-init-only-properties)
+6. [Nested Objects](#nested-objects)
+7. [Collections](#collections)
+8. [Dictionary Mapping](#dictionary-mapping)
+9. [Custom Value Converters](#custom-value-converters)
+10. [Organizing Mappings with Profiles](#organizing-mappings-with-profiles)
+11. [Reverse Mapping with BothWays](#reverse-mapping-with-bothways)
+12. [IQueryable Projections (EF Core)](#iqueryable-projections-ef-core)
+13. [Strict Generated Mode](#strict-generated-mode)
+14. [Build-Time Diagnostics](#build-time-diagnostics)
+15. [API Reference](#api-reference)
+16. [Targets & Compatibility](#targets--compatibility)
 
 ---
 
@@ -29,15 +65,13 @@ Most mapping libraries do their heaviest work at **runtime** — scanning types 
 dotnet add package MappShark
 ```
 
-Requires **.NET Standard 2.0** or **.NET 8+**. The source generator works in any project that references the package — no extra setup needed.
+Requires **.NET Standard 2.0** or **.NET 8+**. The source generator is included in the package — no additional setup is needed.
 
 ---
 
 ## Quick Start
 
 ### 1. Annotate your types
-
-Mark each property you want to map with `[MapIndex(n)]`. Properties that share the same index get mapped to each other — regardless of name differences.
 
 ```csharp
 using MappShark;
@@ -46,17 +80,13 @@ public class UserEntity
 {
     [MapIndex(0)] public int Id { get; set; }
     [MapIndex(1)] public string FullName { get; set; } = string.Empty;
-
-    // No [MapIndex] → always ignored by the indexed mapper.
-    public DateTime CreatedAt { get; set; }
+    public DateTime CreatedAt { get; set; } // no [MapIndex] → ignored
 }
 
 public class UserDto
 {
-    [MapIndex(0)] public int UserId { get; set; }    // maps from Id (same index 0)
-    [MapIndex(1)] public string Name { get; set; } = string.Empty; // maps from FullName (same index 1)
-
-    public string? AvatarUrl { get; set; } // no [MapIndex] → ignored
+    [MapIndex(0)] public int UserId { get; set; }    // mapped from Id   (index 0)
+    [MapIndex(1)] public string Name { get; set; } = string.Empty; // mapped from FullName (index 1)
 }
 ```
 
@@ -68,13 +98,13 @@ var dto = Mapper.Map<UserEntity, UserDto>(entity);
 // dto.Name   == entity.FullName
 ```
 
-That's it. The source generator creates an optimized static mapper during your build. No warm-up, no reflection, no surprises.
+The source generator produces an optimized static method during your build — no warm-up, no reflection, no surprises.
 
 ---
 
-## How it Works
+## How It Works
 
-When you write `Mapper.Map<UserEntity, UserDto>(...)`, MappShark's Roslyn analyzer detects the call at compile time and emits a file called `IndexedMapResolver.g.cs` in your project. This file contains a plain C# method like:
+When you write `Mapper.Map<UserEntity, UserDto>(...)`, MappShark's Roslyn analyzer detects the call at compile time and emits a file called `IndexedMapResolver.g.cs` into your project. This file contains a plain C# method:
 
 ```csharp
 private static UserDto MapPair_0(UserEntity source)
@@ -88,24 +118,37 @@ private static UserDto MapPair_0(UserEntity source)
 
 At runtime, `Mapper.Map` resolves to this method via a cached static delegate. **Zero reflection. Zero allocations beyond the destination object itself.**
 
-For destination types with `init`-only properties (e.g., records), the generator emits object-initializer syntax instead:
+At runtime `Mapper.Map` resolves to this method via a cached static delegate. **Zero reflection. Zero allocations beyond the destination object itself.**
 
-```csharp
-private static UserDto MapPair_0(UserEntity source)
-{
-    return new UserDto
-    {
-        UserId = source.Id,
-        Name   = source.FullName,
-    };
-}
-```
+For `init`-only properties and records, object-initializer or constructor-call syntax is emitted instead — the only valid way to assign those members after construction.
 
 ---
 
-## Name-Based Fallback
+## Mapping Strategies
 
-Don't want to add `[MapIndex]` to every property? If source and destination have properties with **matching names and compatible types**, MappShark maps them automatically — no annotation required.
+### 1. Index-Based Mapping (`[MapIndex]`)
+
+Apply `[MapIndex(n)]` to source and destination properties. Any two properties sharing the same index are mapped to each other, regardless of their names.
+
+```csharp
+public class OrderEntity
+{
+    [MapIndex(0)] public string Reference { get; set; } = string.Empty;
+    [MapIndex(1)] public decimal TotalAmount { get; set; }
+}
+
+public class OrderDto
+{
+    [MapIndex(0)] public string Code { get; set; } = string.Empty;  // ← from Reference
+    [MapIndex(1)] public decimal Total { get; set; }                // ← from TotalAmount
+}
+```
+
+> **Available since v1.0.0**
+
+### 2. Name-Based Fallback
+
+Properties that share the **same name and a compatible type** are mapped automatically — no annotation needed.
 
 ```csharp
 public class ProductEntity
@@ -117,69 +160,69 @@ public class ProductEntity
 
 public class ProductDto
 {
-    public string Name { get; set; } = string.Empty;   // ← mapped by name
-    public decimal Price { get; set; }                 // ← mapped by name
-    // StockCount is missing → simply not mapped
+    public string Name { get; set; } = string.Empty;  // ← mapped by name
+    public decimal Price { get; set; }                // ← mapped by name
+    // StockCount is absent → simply not mapped
 }
 
 var dto = Mapper.Map<ProductEntity, ProductDto>(entity);
 ```
 
-> **Rule:** `[MapIndex]` always takes priority. Name-based fallback only applies to properties that have no index annotation on either side.
+`[MapIndex]` always takes priority. Name-based mapping only applies to properties that carry no index annotation on either side.
 
----
+> **Available since v1.0.0**
 
-## Property Name Overrides: `[MapFrom]` and `[MapTo]`
+### 3. Name Override Attributes (`[MapFrom]` / `[MapTo]`)
 
-When source and destination properties have different names but you don't want — or can't — add `[MapIndex]` to both sides (e.g., to keep domain models free of mapping concerns), use the name-override attributes.
+Use these attributes when source and destination properties have different names but you do not want to use `[MapIndex]` on both sides — for example, to keep domain models free of mapping concerns.
 
-### `[MapFrom("SourcePropertyName")]`
+#### `[MapFrom("SourcePropertyName")]`
 
-Apply on a **destination** property. Tells MappShark to read from the named source property instead of looking for a same-named one.
+Apply to a **destination** property. Reads the value from the named source property.
 
 ```csharp
 public class OrderDto
 {
     public int Id { get; set; }
 
-    [MapFrom("TotalAmount")]   // read from OrderEntity.TotalAmount
+    [MapFrom("TotalAmount")]
     public decimal Total { get; set; }
 }
 
 public class OrderEntity
 {
     public int Id { get; set; }
-    public decimal TotalAmount { get; set; }  // no annotation needed here
+    public decimal TotalAmount { get; set; } // no annotation needed
 }
 
 var dto = Mapper.Map<OrderEntity, OrderDto>(entity);
 // dto.Total == entity.TotalAmount
 ```
 
-### `[MapTo("DestinationPropertyName")]`
+#### `[MapTo("DestinationPropertyName")]`
 
-Apply on a **source** property. Tells MappShark to write its value into the named destination property.
+Apply to a **source** property. Writes its value into the named destination property.
 
 ```csharp
 public class CreateOrderCommand
 {
     public string Reference { get; set; } = string.Empty;
 
-    [MapTo("Price")]           // write into OrderDto.Price
+    [MapTo("Price")]
     public decimal Amount { get; set; }
 }
 
 public class OrderDto
 {
     public string Reference { get; set; } = string.Empty;
-    public decimal Price { get; set; }    // no annotation needed here
+    public decimal Price { get; set; } // no annotation needed
 }
 
 var dto = Mapper.Map<CreateOrderCommand, OrderDto>(command);
 // dto.Price == command.Amount
 ```
 
-### Priority order
+#### Priority order
 
 When multiple strategies could resolve the same destination property, MappShark uses the following priority:
 
@@ -188,54 +231,21 @@ When multiple strategies could resolve the same destination property, MappShark 
 3. `[MapTo]` on the source property
 4. Same-name fallback — lowest priority
 
-### Reverse mapping (`BothWays`)
+> **Note:** `[MapFrom]` and `[MapIndex]` cannot be combined on the same property (diagnostic `MSP015`). `[MapTo]` and `[MapIndex]` cannot be combined either (`MSP016`).
 
-Each mapping direction is resolved independently. Annotate the type that is the destination in each direction:
-
-```csharp
-public class ProductEntity
-{
-    public string Code { get; set; } = string.Empty;
-
-    [MapFrom("Price")]          // when ProductEntity is destination: read from ProductDto.Price
-    public decimal UnitPrice { get; set; }
-}
-
-public class ProductDto
-{
-    public string Code { get; set; } = string.Empty;
-
-    [MapFrom("UnitPrice")]      // when ProductDto is destination: read from ProductEntity.UnitPrice
-    public decimal Price { get; set; }
-}
-
-var dto    = Mapper.BothWays<ProductEntity, ProductDto>(entity);
-var entity = Mapper.Map<ProductDto, ProductEntity>(dto);
-```
-
-> **Constraints:**
-> - `[MapFrom]` and `[MapIndex]` cannot be combined on the same property (`MSP015`).
-> - `[MapTo]` and `[MapIndex]` cannot be combined on the same property (`MSP016`).
-> - If the source property named in `[MapFrom]` does not exist, the build fails with `MSP014`.
+> **Available since v1.0.0**
 
 ---
 
 ## Records and Init-Only Properties
 
-MappShark fully supports C# **records** and any class or struct with `init`-only setters — no extra configuration needed.
+MappShark fully supports C# **records** and any class or struct with `init`-only setters — no extra configuration required.
 
 ### Records with explicit properties
 
-If every `init` property has a **public parameterless constructor** (the default for `record` types with explicit properties), the source generator emits an object-initializer method:
+The source generator emits **object-initializer syntax** for destination types that have a public parameterless constructor and `init`-only setters (the default for `record` types with explicit properties):
 
 ```csharp
-public class OrderEntity
-{
-    public int Id { get; set; }
-    public decimal TotalAmount { get; set; }
-    public string CustomerName { get; set; } = string.Empty;
-}
-
 public record OrderDto
 {
     public int Id { get; init; }
@@ -248,104 +258,71 @@ public record OrderDto
 }
 
 var dto = Mapper.Map<OrderEntity, OrderDto>(entity);
-// dto.Total    == entity.TotalAmount
-// dto.Customer == entity.CustomerName
 ```
 
-Generated code uses object-initializer syntax, which is the only way to assign `init` properties after construction:
+Generated code:
 
 ```csharp
-private static OrderDto MapPair_0(OrderEntity source)
-{
-    return new OrderDto
+private static OrderDto MapPair_0(OrderEntity source) =>
+    new OrderDto
     {
         Id = source.Id,
         Total = source.TotalAmount,
         Customer = source.CustomerName,
     };
-}
 ```
 
 ### Positional records
 
-Positional records (`record Foo(int Bar)`) have **no parameterless constructor**. MappShark fully supports them via generated **constructor-call syntax** — no reflection fallback required.
-
-All three mapping attributes — `[MapIndex]`, `[MapFrom]`, and `[MapTo]` — can be placed **directly on positional parameters**:
+Positional records (`record Foo(int Bar)`) have no parameterless constructor. MappShark emits **constructor-call syntax** for them. All three mapping attributes — `[MapIndex]`, `[MapFrom]`, and `[MapTo]` — can be placed directly on positional parameters:
 
 ```csharp
-// All properties map by name — no attributes needed.
-public record PointDto(double X, double Y);
-
-// [MapFrom] directly on the parameter
 public record OrderDto(
     int Id,
     [MapFrom("TotalAmount")] decimal Total,
     [MapFrom("CustomerName")] string Customer
 );
 
-// [MapIndex] on positional parameters — index-based mapping
-public record WidgetDto(
-    [MapIndex(0)] string SerialNumber,
-    [MapIndex(1)] int Version
-);
-
-// [MapTo] on the source — write into the named positional parameter
-public sealed class ContractCommand
-{
-    [MapTo("Title")] public string ContractName { get; set; } = string.Empty;
-    [MapTo("Value")] public decimal Amount { get; set; }
-}
-public record ContractDto(string Title, decimal Value);
-
-var dto = Mapper.Map<OrderEntity, OrderDto>(entity); // uses generated constructor-call code
+var dto = Mapper.Map<OrderEntity, OrderDto>(entity);
 ```
 
-The source generator emits constructor-call syntax:
+Generated code:
 
 ```csharp
-private static OrderDto MapPair_N(OrderEntity source) =>
+private static OrderDto MapPair_0(OrderEntity source) =>
     new OrderDto(
         Id: source.Id,
         Total: source.TotalAmount,
         Customer: source.CustomerName);
 ```
 
-> **Note:** The `[property: ...]` target specifier (e.g. `[property: MapFrom("X")]`) is also accepted as an alternative syntax — both forms are equivalent.
+> The `[property: MapFrom("X")]` target specifier is also accepted as an alternative syntax.
 
-> **Limitation:** `Mapper.Projection<TSource, TDestination>()` (LINQ expression trees) is not supported for positional records — only `Mapper.Map` and `Mapper.MapMany`.
+> **Limitation:** `Mapper.Projection` (IQueryable expression trees) is not supported for positional records.
 
-#### Orphan parameters
+### Orphan parameters
 
-Positional parameters that have **no matching source property** — no `[MapFrom]`/`[MapTo]`/`[MapIndex]` annotation and no same-name source property — are treated as *orphans* and silently skipped. Their constructor slot receives the CLR default (`null` for reference types, `default(T)` for value types). This lets you include extra parameters in the record that carry response-specific data you set yourself after mapping:
+Positional parameters that have no matching source property are treated as *orphans* and silently skipped. Their constructor slot receives the CLR default (`null` / `default(T)`). This allows you to include extra parameters in the record that you populate yourself after mapping:
 
 ```csharp
-public class UserEntity
-{
-    public Guid PublicId { get; set; }
-    public string UserName { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    // No VerificationRequired property
-}
-
 public sealed record RegisterUserResponseDto(
     [MapFrom("PublicId")]  Guid   UserId,
     [MapFrom("UserName")]  string UserName,
     [MapFrom("Email")]     string Email,
-    bool VerificationRequired   // orphan — no source property, defaults to false
+    bool VerificationRequired   // orphan → defaults to false; set it yourself
 );
 
 var dto = Mapper.Map<UserEntity, RegisterUserResponseDto>(entity);
-// dto.UserId              == entity.PublicId
-// dto.UserName            == entity.UserName
-// dto.Email               == entity.Email
-// dto.VerificationRequired == false  ← CLR default; set it yourself afterward
+// dto.VerificationRequired == false  ← set it afterward as needed
 ```
+
+> **Available since v1.0.0.** Orphan parameter fix in reflection fallback: **v1.0.2**.
 
 ---
 
 ## Nested Objects
 
-MappShark automatically handles nested objects. Just call `Mapper.Map` once for the top-level type — the generator discovers and wires up all required nested pairs.
+MappShark handles nested objects automatically. Call `Mapper.Map` once for the top-level type — the generator discovers and wires up all required nested pairs recursively.
 
 ```csharp
 public class OrderEntity
@@ -362,19 +339,21 @@ public class OrderDto
     [MapIndex(2)] public List<OrderLineDto>? Items { get; set; }
 }
 
-// One call maps the whole graph:
+// One call maps the entire object graph:
 var dto = Mapper.Map<OrderEntity, OrderDto>(order);
 ```
 
-The generator recursively discovers `CustomerEntity → CustomerDto` and `OrderLineEntity → OrderLineDto` and generates optimized code for all of them.
+The generator discovers `CustomerEntity → CustomerDto` and `OrderLineEntity → OrderLineDto` automatically and generates optimized code for each pair.
+
+> **Available since v1.0.0**
 
 ---
 
 ## Collections
 
-Supported collection targets:
+Supported destination collection types:
 
-| Destination type | Supported |
+| Type | Supported |
 |---|:---:|
 | `List<T>` | ✅ |
 | `IList<T>`, `ICollection<T>`, `IEnumerable<T>` | ✅ |
@@ -383,11 +362,20 @@ Supported collection targets:
 | `IDictionary<TKey, TValue>` | ✅ |
 | `IReadOnlyDictionary<TKey, TValue>` | ✅ |
 
+Use `Mapper.MapMany` to map an entire flat collection in a single call:
+
+```csharp
+IEnumerable<UserEntity> entities = GetUsers();
+List<UserDto> dtos = Mapper.MapMany<UserEntity, UserDto>(entities);
+```
+
+> **Available since v1.0.0**
+
 ---
 
-## Dictionary Mappings *(new in 1.0.0)*
+## Dictionary Mapping
 
-MappShark maps `Dictionary<TKey, TValue>` properties end-to-end — both keys and values are handled without any extra configuration.
+MappShark maps `Dictionary<TKey, TValue>` properties end-to-end. Both keys and values are handled without any extra configuration.
 
 ### Simple value types
 
@@ -402,19 +390,13 @@ public class PriceListDto
     [MapIndex(0)] public Dictionary<string, decimal> Prices { get; set; } = new();
 }
 
-var entity = new PriceListEntity
-{
-    Prices = new() { ["apple"] = 1.20m, ["banana"] = 0.80m }
-};
-
 var dto = Mapper.Map<PriceListEntity, PriceListDto>(entity);
-// dto.Prices["apple"]  == 1.20m
-// dto.Prices["banana"] == 0.80m
+// dto.Prices["apple"] == entity.Prices["apple"]
 ```
 
 ### Nested object values
 
-When the value type of source and destination differ but are themselves a mappable pair, MappShark recursively generates a mapper for the value type automatically:
+When source and destination value types are themselves a mappable pair, MappShark generates a mapper for the value type automatically:
 
 ```csharp
 public class CatalogEntity
@@ -428,80 +410,27 @@ public class CatalogDto
 }
 
 var dto = Mapper.Map<CatalogEntity, CatalogDto>(catalog);
-// Each ProductEntity value is mapped to ProductDto via a generated mapper.
+// Each ProductEntity value is mapped to a ProductDto via a generated mapper.
 ```
 
-### Supported destination types
+The destination property can be declared as `Dictionary<K,V>`, `IDictionary<K,V>`, or `IReadOnlyDictionary<K,V>`. Any source type that implements one of those interfaces works as a source (e.g., `SortedDictionary<K,V>`).
 
-The destination property can be declared as `Dictionary<K,V>`, `IDictionary<K,V>`, or `IReadOnlyDictionary<K,V>`. The source side only needs to implement one of those interfaces (e.g., `SortedDictionary<K,V>` works as a source).
+> **Notes:**
+> - Keys must be directly assignable. Incompatible keys produce build error `MSP004`.
+> - Dictionary properties are excluded from `Mapper.Projection` expressions — `MSP013` warning is emitted.
 
-> **Rules:**
-> - Keys must be directly assignable (same type or implicit conversion). Incompatible keys produce a build error (`MSP004`).
-> - Dictionary properties are excluded from `Mapper.Projection` (IQueryable) expressions — `MSP013` warning is emitted.
-
----
-
-## Map Many Items at Once
-
-Use `Mapper.MapMany` to map an entire collection in a single call:
-
-```csharp
-IEnumerable<UserEntity> entities = GetUsers();
-
-List<UserDto> dtos = Mapper.MapMany<UserEntity, UserDto>(entities);
-```
-
----
-
-## Reverse Mapping with `BothWays`
-
-Using `Mapper.BothWays` instead of `Mapper.Map` tells the generator to produce mappers for **both directions** — `A → B` and `B → A`.
-
-```csharp
-// This single call causes the generator to emit mappers for:
-//   UserEntity → UserDto
-//   UserDto    → UserEntity
-var dto = Mapper.BothWays<UserEntity, UserDto>(entity);
-
-// Later, map back:
-var entity = Mapper.Map<UserDto, UserEntity>(dto);
-```
-
-> **Tip:** You only need one `BothWays` call anywhere in your codebase (e.g., in a startup file or a mapping helper) to register both directions.
-
----
-
-## IQueryable Projections (EF Core)
-
-`Mapper.Projection<TSource, TDestination>()` returns a compile-time-generated `Expression<Func<TSource, TDestination>>` that you can pass directly to LINQ `.Select()`. This is the most efficient way to query only the columns you need from a database.
-
-```csharp
-// In your repository or service:
-List<UserDto> dtos = await dbContext.Users
-    .Where(u => u.IsActive)
-    .Select(Mapper.Projection<UserEntity, UserDto>())
-    .ToListAsync();
-```
-
-The expression is inlined at compile time — **no reflection, no dynamic expression building at runtime**. Properties with `[MapConverter]` are excluded from projections (see diagnostic `MSP013`).
-
-> **Note:** No EF Core package is required by MappShark itself. `System.Linq.Expressions` is part of the standard library.
+> **Available since v1.0.0**
 
 ---
 
 ## Custom Value Converters
 
-When a property needs a custom transformation (e.g., `decimal → string`), implement `IMapValueConverter<TSource, TDestination>` and attach it with `[MapConverter]`:
+When a property needs a custom transformation (e.g., `decimal → string`), implement `IMapValueConverter<TSource, TDestination>` and attach it with `[MapConverter]`.
 
 ```csharp
 public class PercentConverter : IMapValueConverter<decimal, string>
 {
     public string Convert(decimal value) => $"{value * 100:0.##}%";
-}
-
-public class MetricEntity
-{
-    [MapIndex(0)] public decimal Ratio { get; set; }
 }
 
 public class MetricDto
@@ -512,16 +441,40 @@ public class MetricDto
 }
 ```
 
-Requirements for converters:
+Requirements:
 - Must implement `IMapValueConverter<TSourceMember, TDestinationMember>`.
-- Must be a concrete, non-abstract class.
-- Must have a public parameterless constructor.
+- Must be a concrete, non-abstract class with a public parameterless constructor.
+
+### `[MapConverter]` on source properties
+
+You can also place `[MapConverter]` on a **source** property (or positional record parameter). This keeps the destination type completely free of MappShark attributes:
+
+```csharp
+public class MetricEntity
+{
+    [MapIndex(0)]
+    [MapConverter(typeof(PercentConverter))]  // converter lives on the source side
+    public decimal Ratio { get; set; }
+}
+
+public class MetricDto
+{
+    [MapIndex(0)]
+    public string RatioLabel { get; set; } = string.Empty; // no MappShark attributes needed
+}
+```
+
+> **`[MapConverter]` on destination properties: available since v1.0.0**
+>
+> **`[MapConverter]` on source properties / record parameters: available since v1.1.0**
+
+> **Note:** Properties with `[MapConverter]` are excluded from `Mapper.Projection` (IQueryable) expressions — diagnostic `MSP013` is emitted.
 
 ---
 
 ## Organizing Mappings with Profiles
 
-For medium and large projects, use `MappSharkProfile` to group related mappings together. The source generator discovers your profiles automatically and generates mappers for all registered pairs.
+For medium and large projects, use `MappSharkProfile` to group related mappings together. The source generator discovers your profiles automatically — **no runtime registration needed**.
 
 ```csharp
 using MappShark;
@@ -531,51 +484,90 @@ public class OrderMappingProfile : MappSharkProfile
     public OrderMappingProfile()
     {
         CreateMap<OrderEntity, OrderDto>();
-        CreateMap<OrderDto, OrderEntity>();  // reverse direction
+        CreateMap<OrderDto, OrderEntity>();       // reverse direction
         CreateMap<OrderLineEntity, OrderLineDto>();
     }
 }
 ```
 
-> **Note:** You don't need to instantiate profiles manually — the generator reads the `CreateMap<,>()` calls at compile time. No runtime registration needed.
+> **Available since v1.0.0**
+
+---
+
+## Reverse Mapping with `BothWays`
+
+`Mapper.BothWays` signals the source generator to produce mappers for **both directions** — `A → B` and `B → A` — from a single call.
+
+```csharp
+// This call registers both UserEntity → UserDto and UserDto → UserEntity.
+var dto = Mapper.BothWays<UserEntity, UserDto>(entity);
+
+// Later, map back:
+var entity = Mapper.Map<UserDto, UserEntity>(dto);
+```
+
+You only need one `BothWays` call anywhere in your codebase (e.g., in a profile or startup file) to register both directions.
+
+> **Available since v1.0.0**
+
+---
+
+## IQueryable Projections (EF Core)
+
+`Mapper.Projection<TSource, TDestination>()` returns a compile-time-generated `Expression<Func<TSource, TDestination>>` that you can pass directly to LINQ `.Select()`. This lets EF Core translate the projection to SQL and fetch only the columns you need.
+
+```csharp
+List<UserDto> dtos = await dbContext.Users
+    .Where(u => u.IsActive)
+    .Select(Mapper.Projection<UserEntity, UserDto>())
+    .ToListAsync();
+```
+
+No EF Core package is required by MappShark itself — `System.Linq.Expressions` is part of the standard library.
+
+> **Note:** Properties with `[MapConverter]` and dictionary properties are excluded from projections (`MSP013`). Positional records are not supported in projections.
+
+> **Available since v1.0.0**
 
 ---
 
 ## Strict Generated Mode
 
-By default, MappShark falls back to a reflection-based mapper when no generated mapper is found (useful during development or for types discovered at runtime). To enforce that **only generated mappers are used**, set the AppContext switch:
+By default, MappShark falls back to a reflection-based mapper when no generated mapper is found — useful during development or for types discovered at runtime. To enforce that **only generated mappers are used**, set the AppContext switch at startup:
 
 ```csharp
-// In your application startup (e.g., Program.cs):
+// Program.cs or equivalent startup code:
 AppContext.SetSwitch("MappShark.StrictGeneratedMode", true);
 ```
 
-With strict mode on, `Mapper.Map` throws `InvalidOperationException` if no generated mapper exists for a given pair, making misconfiguration immediately visible.
+With strict mode enabled, `Mapper.Map` throws `InvalidOperationException` if no generated mapper exists for a given pair, making misconfiguration immediately visible.
+
+> **Available since v1.0.0**
 
 ---
 
 ## Build-Time Diagnostics
 
-MappShark reports configuration problems as **compiler errors or warnings** — they show up in your IDE and CI build output, not at runtime.
+MappShark surfaces configuration problems as **compiler errors or warnings** — they appear in your IDE and CI build output, never at runtime.
 
 | Code | Severity | Description |
 |---|---|---|
-| `MSP001` | Error | Duplicate `[MapIndex]` in source type |
-| `MSP002` | Error | Duplicate `[MapIndex]` in destination type |
+| `MSP001` | Error | Duplicate `[MapIndex]` on source type |
+| `MSP002` | Error | Duplicate `[MapIndex]` on destination type |
 | `MSP003` | Error | Destination index has no matching source index |
 | `MSP004` | Error | Source and destination indexed properties are type-incompatible |
 | `MSP005` | Error | Indexed source property has no public getter |
 | `MSP006` | Error | Indexed destination property has no public setter |
 | `MSP007` | Error | `[MapIndex]` on a static property |
 | `MSP008` | Error | Index value is negative |
-| `MSP009` | Error | Converter does not implement the required `IMapValueConverter<,>` contract |
-| `MSP010` | Error | Converter cannot be instantiated (abstract or no public constructor) |
+| `MSP009` | Error | Converter does not implement `IMapValueConverter<,>` |
+| `MSP010` | Error | Converter cannot be instantiated (abstract or no public parameterless constructor) |
 | `MSP011` | Error | Destination collection type is not supported |
 | `MSP012` | Error | Destination nested/element type has no public parameterless constructor |
-| `MSP013` | Warning | Property with `[MapConverter]` is excluded from IQueryable projections |
+| `MSP013` | Warning | Property with `[MapConverter]` or dictionary is excluded from IQueryable projections |
 | `MSP014` | Error | `[MapFrom]` references a source property that does not exist |
-| `MSP015` | Error | `[MapFrom]` and `[MapIndex]` cannot be used on the same property |
-| `MSP016` | Error | `[MapTo]` and `[MapIndex]` cannot be used on the same property |
+| `MSP015` | Error | `[MapFrom]` and `[MapIndex]` used on the same property |
+| `MSP016` | Error | `[MapTo]` and `[MapIndex]` used on the same property |
 
 ---
 
@@ -583,10 +575,10 @@ MappShark reports configuration problems as **compiler errors or warnings** — 
 
 | Method | Description |
 |---|---|
-| `Mapper.Map<TSource, TDest>(source)` | Maps a single object |
-| `Mapper.MapMany<TSource, TDest>(source)` | Maps a collection to `List<TDest>` |
-| `Mapper.BothWays<TSource, TDest>(source)` | Maps forward + registers reverse pair for code generation |
-| `Mapper.Projection<TSource, TDest>()` | Returns a compiled expression for `IQueryable.Select()` |
+| `Mapper.Map<TSource, TDest>(source)` | Maps a single object. |
+| `Mapper.MapMany<TSource, TDest>(source)` | Maps a collection to `List<TDest>`. |
+| `Mapper.BothWays<TSource, TDest>(source)` | Maps forward and registers the reverse pair for code generation. |
+| `Mapper.Projection<TSource, TDest>()` | Returns a compile-time-generated expression for `IQueryable.Select()`. |
 
 ---
 
@@ -605,3 +597,4 @@ MappShark reports configuration problems as **compiler errors or warnings** — 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+

@@ -166,15 +166,19 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
                 mapFromOverrides[destProp.Name] = mapFrom.PropertyName;
         }
 
-        // [MapTo("Y")] on source property → destPropName → sourceProp
-        var mapToOverrides = new Dictionary<string, PropertyInfo>(StringComparer.Ordinal);
+        // [MapTo("Y")] on source property → destPropName → (sourceProp, optional converter)
+        var mapToOverrides = new Dictionary<string, (PropertyInfo Property, Type? ConverterType)>(StringComparer.Ordinal);
         foreach (var srcProp in sourceType.GetProperties(BindingFlags.Instance | BindingFlags.Public)
             .Where(p => p.GetMethod is not null && p.GetMethod.IsPublic && !sourceMappedByIndex.Contains(p.Name)))
         {
             var mapTo = srcProp.GetCustomAttribute<MapToAttribute>(inherit: true)
                 ?? GetPositionalParameterAttribute<MapToAttribute>(sourceType, srcProp.Name);
             if (mapTo is not null)
-                mapToOverrides[mapTo.PropertyName] = srcProp;
+            {
+                var srcConverterType = (srcProp.GetCustomAttribute<MapConverterAttribute>(inherit: true)
+                    ?? GetPositionalParameterAttribute<MapConverterAttribute>(sourceType, srcProp.Name))?.ConverterType;
+                mapToOverrides[mapTo.PropertyName] = (srcProp, srcConverterType);
+            }
         }
 
         foreach (var destProp in destinationType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
@@ -186,14 +190,16 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
 
             // Priority: [MapFrom] > [MapTo] > same-name fallback
             PropertyInfo? srcProp;
+            Type? mapToConverterType = null;
             if (mapFromOverrides.TryGetValue(destProp.Name, out var fromSourceName))
             {
                 if (!sourceByName.TryGetValue(fromSourceName, out srcProp))
                     continue; // [MapFrom] source not found — skip (generator would have reported MSP014)
             }
-            else if (mapToOverrides.TryGetValue(destProp.Name, out var srcFromMapTo))
+            else if (mapToOverrides.TryGetValue(destProp.Name, out var mapToEntry))
             {
-                srcProp = srcFromMapTo;
+                srcProp = mapToEntry.Property;
+                mapToConverterType = mapToEntry.ConverterType;
             }
             else if (!sourceByName.TryGetValue(destProp.Name, out srcProp))
             {
@@ -202,7 +208,19 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
 
             // Check type compatibility (direct, nullable, collection, or nested)
             Func<object?, object?> converter;
-            if (destProp.PropertyType.IsAssignableFrom(srcProp.PropertyType))
+            if (mapToConverterType is not null)
+            {
+                converter = BuildCustomConverter(
+                    sourceType,
+                    destinationType,
+                    index: -1,
+                    srcProp!,
+                    destProp,
+                    mapToConverterType,
+                    srcProp!.PropertyType,
+                    destProp.PropertyType);
+            }
+            else if (destProp.PropertyType.IsAssignableFrom(srcProp.PropertyType))
             {
                 converter = static v => v;
             }

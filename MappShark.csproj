@@ -7,13 +7,16 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>1.0.2</Version>
+    <Version>1.1.0</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v1.1.0
+- New: [MapConverter] now works with [MapTo] on source properties (and record parameters). Converters placed on the source side are applied during both generated and reflection-based mapping, keeping the destination type free of any MappShark attributes.
+
 v1.0.2
 - Fix: positional record parameters that have no matching source property ("orphan" parameters) are now correctly skipped during reflection-based mapping — their constructor slot receives the CLR default value (null / default(T)) instead of throwing InvalidOperationException at runtime. This restores the intended behaviour where only annotated parameters are mapped and unannotated ones are left as developer-supplied defaults.
 

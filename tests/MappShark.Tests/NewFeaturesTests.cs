@@ -110,6 +110,45 @@ public sealed class NewFeaturesTests
     }
 
     [Fact]
+    public void MapTo_WithConverter_TransformsScalarValue()
+    {
+        var source = new TaggedSource { Label = "hello" };
+        var dest = Mapper.Map<TaggedSource, TaggedDestination>(source);
+
+        Assert.Equal("HELLO", dest.Tag); // Label → Tag via [MapTo] + [MapConverter]
+    }
+
+    [Fact]
+    public void MapTo_WithConverter_TransformsCollection()
+    {
+        var source = new PostCommandSource
+        {
+            Content = "My post",
+            ImageUrls = new List<string> { "https://a.com/1.jpg", "https://b.com/2.jpg" }
+        };
+
+        var dest = Mapper.Map<PostCommandSource, PostEntityDestination>(source);
+
+        Assert.Equal("My post", dest.Content);
+        Assert.NotNull(dest.Images);
+        Assert.Equal(2, dest.Images!.Count);
+        Assert.Equal("https://a.com/1.jpg", dest.Images[0].Url);
+        Assert.Equal("https://b.com/2.jpg", dest.Images[1].Url);
+    }
+
+    [Fact]
+    public void MapTo_WithConverter_OnPositionalRecord_TransformsCollection()
+    {
+        var command = new PostRecordCommand("My record post", new List<string> { "https://c.com/3.jpg" });
+        var dest = Mapper.Map<PostRecordCommand, PostEntityDestination>(command);
+
+        Assert.Equal("My record post", dest.Content);
+        Assert.NotNull(dest.Images);
+        Assert.Single(dest.Images!);
+        Assert.Equal("https://c.com/3.jpg", dest.Images[0].Url);
+    }
+
+    [Fact]
     public void MapFrom_TakesPriorityOverNameFallback()
     {
         // OrderOverride has a Name property in source, but [MapFrom("Title")] on dest
@@ -263,5 +302,55 @@ public sealed class NewFeaturesTests
         {
             CreateMap<PersonSource, PersonDestination>();
         }
+    }
+
+    // ---------- Test types for [MapTo] + [MapConverter] ----------
+
+    private sealed class TaggedSource
+    {
+        [MapTo("Tag")]
+        [MapConverter(typeof(UpperCaseConverter))]
+        public string Label { get; set; } = string.Empty;
+    }
+
+    private sealed class TaggedDestination
+    {
+        public string Tag { get; set; } = string.Empty;
+    }
+
+    private sealed class UpperCaseConverter : IMapValueConverter<string, string>
+    {
+        public string Convert(string source) => source.ToUpperInvariant();
+    }
+
+    private sealed class PostCommandSource
+    {
+        public string Content { get; set; } = string.Empty;
+
+        [MapTo("Images")]
+        [MapConverter(typeof(UrlListToImageEntityListConverter))]
+        public List<string> ImageUrls { get; set; } = new();
+    }
+
+    private sealed record PostRecordCommand(
+        [MapTo("Content")] string PostContent,
+        [MapTo("Images"), MapConverter(typeof(UrlListToImageEntityListConverter))] List<string> ImageUrls
+    );
+
+    private sealed class PostEntityDestination
+    {
+        public string Content { get; set; } = string.Empty;
+        public List<PostImageItem>? Images { get; set; }
+    }
+
+    private sealed class PostImageItem
+    {
+        public string Url { get; set; } = string.Empty;
+    }
+
+    private sealed class UrlListToImageEntityListConverter : IMapValueConverter<List<string>, List<PostImageItem>>
+    {
+        public List<PostImageItem> Convert(List<string> source)
+            => source.Select(url => new PostImageItem { Url = url }).ToList();
     }
 }
