@@ -6,7 +6,6 @@ using System.Reflection;
 namespace MappShark.Internal;
 
 internal static class ReflectionMapperFactory<TSource, TDestination>
-    where TDestination : new()
 {
     private static readonly Type GenericConverterContract = typeof(IMapValueConverter<,>);
 
@@ -14,13 +13,83 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
 
     private static Func<TSource, TDestination> BuildMapper()
     {
+        var destinationType = typeof(TDestination);
+
+        // Positional records and other types without a parameterless constructor:
+        // build the instance by invoking the primary constructor with resolved argument values.
+        var parameterlessCtor = destinationType.GetConstructor(Type.EmptyTypes);
+        if (parameterlessCtor is null)
+        {
+            return BuildConstructorBasedMapper(destinationType);
+        }
+
         var propertyPairs = BuildPropertyPairs();
 
         return source =>
         {
-            var destination = new TDestination();
+            var destination = (TDestination)parameterlessCtor.Invoke(null);
 
             foreach (var pair in propertyPairs)
+            {
+                var value = pair.Source.GetValue(source);
+                var converted = pair.Converter(value);
+                pair.Destination.SetValue(destination, converted);
+            }
+
+            return destination;
+        };
+    }
+
+    private static Func<TSource, TDestination> BuildConstructorBasedMapper(Type destinationType)
+    {
+        // Find the primary constructor: public, not the record copy constructor (single param of same type)
+        var primaryCtor = destinationType
+            .GetConstructors(BindingFlags.Instance | BindingFlags.Public)
+            .Where(c =>
+            {
+                var p = c.GetParameters();
+                return p.Length > 0 && !(p.Length == 1 && p[0].ParameterType == destinationType);
+            })
+            .OrderByDescending(c => c.GetParameters().Length)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                $"No suitable public constructor found for type '{destinationType.FullName}'. " +
+                "Positional records require a public primary constructor.");
+
+        var ctorParams = primaryCtor.GetParameters();
+
+        // BuildPropertyPairs already resolves [MapFrom], [MapTo], name fallback and type conversion.
+        // For positional records, [MapFrom] on positional parameters is forwarded to the synthesized
+        // property by the C# compiler, so GetCustomAttribute works correctly.
+        var allPairs = BuildPropertyPairs();
+        var pairByDestName = allPairs.ToDictionary(p => p.Destination.Name, StringComparer.OrdinalIgnoreCase);
+
+        // Positional args: one per constructor parameter, resolved by parameter name.
+        var positionalPairs = ctorParams.Select(param =>
+        {
+            if (!pairByDestName.TryGetValue(param.Name!, out var pair))
+                throw new InvalidOperationException(
+                    $"Cannot map constructor parameter '{param.Name}' of '{destinationType.FullName}': " +
+                    "no matching source property found. Add [MapFrom] or ensure names match.");
+            pairByDestName.Remove(param.Name!); // remove so it's not set again via SetValue
+            return pair;
+        }).ToArray();
+
+        // Remaining pairs: non-positional init properties that can be set via SetValue after construction.
+        var remainingPairs = pairByDestName.Values.ToArray();
+
+        return source =>
+        {
+            var args = new object?[ctorParams.Length];
+            for (var i = 0; i < ctorParams.Length; i++)
+            {
+                var value = positionalPairs[i].Source.GetValue(source);
+                args[i] = positionalPairs[i].Converter(value);
+            }
+
+            var destination = (TDestination)primaryCtor.Invoke(args);
+
+            foreach (var pair in remainingPairs)
             {
                 var value = pair.Source.GetValue(source);
                 var converted = pair.Converter(value);

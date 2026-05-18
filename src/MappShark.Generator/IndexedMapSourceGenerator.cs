@@ -683,8 +683,55 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         // Object initializer syntax requires new(), so skip generated code and let the reflection fallback handle them.
         if (useObjectInitializer && !CanConstructDestinationType(pair.DestinationType))
         {
-            generatedPair = null!;
-            return false;
+            if (pair.DestinationType is not INamedTypeSymbol positionalRecordType)
+            {
+                generatedPair = null!;
+                return false;
+            }
+
+            var primaryCtor = GetPositionalRecordPrimaryConstructor(positionalRecordType);
+            if (primaryCtor is null)
+            {
+                generatedPair = null!;
+                return false;
+            }
+
+            // Re-order assignments to match constructor parameter order.
+            // [MapFrom]/[MapTo]/name attributes are on the synthesized properties (C# forwards
+            // property-targeted attributes from positional parameters to the generated property),
+            // so the existing assignment resolution is already correct.
+            var byDestName = assignments.ToDictionary(a => a.DestinationPropertyName, StringComparer.OrdinalIgnoreCase);
+            var ctorAssignments = new List<PropertyAssignment>(primaryCtor.Parameters.Length);
+            foreach (var param in primaryCtor.Parameters)
+            {
+                if (!byDestName.TryGetValue(param.Name, out var ctorAssignment))
+                {
+                    // Unresolved constructor parameter — cannot generate code; reflection fallback will handle it.
+                    generatedPair = null!;
+                    return false;
+                }
+
+                ctorAssignments.Add(ctorAssignment);
+                byDestName.Remove(param.Name);
+            }
+
+            // Any remaining assignments are non-positional init properties; append them after constructor params
+            // (they will be emitted via SetValue semantics in the generated code).
+            foreach (var remaining in byDestName.Values)
+            {
+                ctorAssignments.Add(remaining);
+            }
+
+            generatedPair = new GeneratedPair(
+                key: pair.SourceType.ToDisplayString(FullyQualifiedTypeFormat) + "->" + pair.DestinationType.ToDisplayString(FullyQualifiedTypeFormat),
+                sourceTypeName: pair.SourceType.ToDisplayString(FullyQualifiedTypeFormat),
+                destinationTypeName: pair.DestinationType.ToDisplayString(FullyQualifiedTypeFormat),
+                assignments: ctorAssignments,
+                useConstructorCall: true);
+
+            // Projections are not generated for positional records.
+            generatedPair.ProjectionAssignments = null;
+            return true;
         }
 
         generatedPair = new GeneratedPair(
@@ -1424,6 +1471,45 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             && constructor.Parameters.Length == 0);
     }
 
+    /// <summary>
+    /// Returns the primary constructor of a positional record: the public constructor whose
+    /// parameters correspond to the record's positional properties (not the copy constructor).
+    /// Returns null if the type is not a positional record or has no suitable constructor.
+    /// </summary>
+    private static IMethodSymbol? GetPositionalRecordPrimaryConstructor(INamedTypeSymbol type)
+    {
+        if (!type.IsRecord)
+        {
+            return null;
+        }
+
+        // The copy constructor has exactly one parameter of the same record type.
+        // The primary constructor is any other public constructor with at least one parameter.
+        foreach (var ctor in type.InstanceConstructors)
+        {
+            if (ctor.DeclaredAccessibility != Accessibility.Public)
+            {
+                continue;
+            }
+
+            if (ctor.Parameters.Length == 0)
+            {
+                continue;
+            }
+
+            // Skip the compiler-generated copy constructor
+            if (ctor.Parameters.Length == 1
+                && SymbolEqualityComparer.Default.Equals(ctor.Parameters[0].Type, type))
+            {
+                continue;
+            }
+
+            return ctor;
+        }
+
+        return null;
+    }
+
     private static bool CanBeNull(ITypeSymbol type)
     {
         if (type.IsReferenceType)
@@ -1502,6 +1588,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         for (var i = 0; i < pairs.Count; i++)
         {
             var pair = pairs[i];
+            // Positional records use the untyped path (no new() constraint) — skip TryResolveTyped
+            if (pair.UseConstructorCall) continue;
             builder.Append("            if (typeof(TSource) == typeof(");
             builder.Append(pair.SourceTypeName);
             builder.Append(") && typeof(TDestination) == typeof(");
@@ -1532,6 +1620,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         for (var i = 0; i < pairs.Count; i++)
         {
             var pair = pairs[i];
+            if (pair.UseConstructorCall) continue; // positional records have no projection support
             if (pair.ProjectionAssignments is null)
                 continue;
             builder.Append("            if (typeof(TSource) == typeof(");
@@ -1572,6 +1661,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         for (var i = 0; i < pairs.Count; i++)
         {
             var pair = pairs[i];
+            // KnownMapCache has where TDestination : new() — positional records use the untyped path
+            if (pair.UseConstructorCall) continue;
             builder.Append("                if (typeof(TSource) == typeof(");
             builder.Append(pair.SourceTypeName);
             builder.Append(") && typeof(TDestination) == typeof(");
@@ -1721,6 +1812,41 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                 }
 
                 builder.AppendLine("            };");
+                builder.AppendLine("        }");
+            }
+            else if (pair.UseConstructorCall)
+            {
+                // Constructor-call syntax for positional records (no parameterless constructor).
+                // Assignments are ordered to match the constructor parameter positions.
+                builder.Append("            return new ");
+                builder.Append(pair.DestinationTypeName);
+                builder.AppendLine("(");
+
+                for (var assignIdx = 0; assignIdx < pair.Assignments.Count; assignIdx++)
+                {
+                    var assignment = pair.Assignments[assignIdx];
+                    builder.Append("                ");
+                    builder.Append(EscapeIdentifier(assignment.DestinationPropertyName));
+                    builder.Append(": ");
+                    var valueExprCtor = assignment.ValueExpression;
+                    foreach (var kv in directCallMap)
+                        valueExprCtor = valueExprCtor.Replace(kv.Key, kv.Value);
+                    foreach (var kv in directCallMap)
+                    {
+                        var methodRef = kv.Value.Substring(0, kv.Value.Length - 1);
+                        valueExprCtor = valueExprCtor.Replace("static item => " + methodRef + "(item)", methodRef);
+                    }
+                    builder.Append(valueExprCtor);
+                    if (assignIdx < pair.Assignments.Count - 1)
+                    {
+                        builder.AppendLine(",");
+                    }
+                    else
+                    {
+                        builder.AppendLine(");");
+                    }
+                }
+
                 builder.AppendLine("        }");
             }
             else
@@ -2010,7 +2136,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private sealed class GeneratedPair
     {
-        public GeneratedPair(string key, string sourceTypeName, string destinationTypeName, IReadOnlyList<PropertyAssignment> assignments, bool useObjectInitializer = false)
+        public GeneratedPair(string key, string sourceTypeName, string destinationTypeName, IReadOnlyList<PropertyAssignment> assignments, bool useObjectInitializer = false, bool useConstructorCall = false)
         {
             Key = key;
             SourceTypeName = sourceTypeName;
@@ -2019,6 +2145,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             ProjectionAssignments = null;
             MethodName = string.Empty;
             UseObjectInitializer = useObjectInitializer;
+            UseConstructorCall = useConstructorCall;
         }
 
         public string Key { get; }
@@ -2031,6 +2158,9 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
         /// <summary>True when any mapped destination property uses an init-only setter. The generated mapper method will use object-initializer syntax instead of post-construction assignment.</summary>
         public bool UseObjectInitializer { get; }
+
+        /// <summary>True when the destination is a positional record (no parameterless constructor). The generated method uses named constructor arguments.</summary>
+        public bool UseConstructorCall { get; }
 
         /// <summary>Projection assignments (excludes converter properties). Null means projection not generated.</summary>
         public IReadOnlyList<ProjectionAssignment>? ProjectionAssignments { get; set; }

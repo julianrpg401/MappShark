@@ -6,16 +6,21 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>0.3.0-preview.3</Version>
+    <Version>0.3.0-preview.4</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v0.3.0-preview.4
+- Positional records are now fully supported via generated constructor-call syntax (new T(Param: val)) — no reflection fallback.
+- Use [property: MapFrom("...")] / [property: MapTo("...")] on positional parameters to configure mappings.
+- Removed where TDestination : new() constraints from Mapper.Map, Mapper.BothWays, Mapper.MapMany, and internal bridge classes.
+- Projection (LINQ expression trees) is not supported for positional records.
+
 v0.3.0-preview.3
 - Records and init-only properties: the source generator now emits object-initializer syntax for destination types that have init-only setters (e.g., record { get; init; }).
-- Positional records (no parameterless constructor) automatically fall back to the reflection mapper — no configuration needed.
 - [MapFrom] / [MapTo] work seamlessly with init-only destination properties.
 
 v0.3.0-preview.2

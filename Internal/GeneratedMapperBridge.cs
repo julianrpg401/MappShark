@@ -22,7 +22,6 @@ internal static class GeneratedMapperBridge
     }
 
     internal static bool TryResolveTyped<TSource, TDestination>(out Func<TSource, TDestination> mapper)
-        where TDestination : new()
     {
         var key = new TypePair(typeof(TSource), typeof(TDestination));
         var cacheEntry = TypedCache.GetOrAdd(key, static _ => ResolveTypedMapper<TSource, TDestination>());
@@ -46,6 +45,43 @@ internal static class GeneratedMapperBridge
         var cached = ProjectionCache.GetOrAdd(key, static _ => ResolveProjection<TSource, TDestination>());
         projection = cached as Expression<Func<TSource, TDestination>>;
         return projection is not null;
+    }
+
+    /// <summary>
+    /// Unconstrained variant for use when the caller cannot guarantee TDestination : new() at compile time.
+    /// Returns null for types without a parameterless constructor (e.g. positional records).
+    /// </summary>
+    internal static Expression<Func<TSource, TDestination>>? TryResolveProjectionUnconstrained<TSource, TDestination>()
+    {
+        if (typeof(TDestination).GetConstructor(Type.EmptyTypes) is null)
+            return null;
+        var key = new TypePair(typeof(TSource), typeof(TDestination));
+        var cached = ProjectionCache.GetOrAdd(key, static _ => ResolveProjectionUnconstrained<TSource, TDestination>());
+        return cached as Expression<Func<TSource, TDestination>>;
+    }
+
+    private static object? ResolveProjectionUnconstrained<TSource, TDestination>()
+    {
+        foreach (var resolver in ResolverProviders.Value)
+        {
+            if (resolver.TryResolveProjectionMethodDefinition is null)
+                continue;
+
+            try
+            {
+                var closedMethod = resolver.TryResolveProjectionMethodDefinition.MakeGenericMethod(typeof(TSource), typeof(TDestination));
+                var args = new object?[] { null };
+                var resolved = closedMethod.Invoke(obj: null, parameters: args);
+                if (resolved is bool success && success && args[0] is Expression<Func<TSource, TDestination>> expr)
+                    return expr;
+            }
+            catch
+            {
+                // Continue probing
+            }
+        }
+
+        return null;
     }
 
     private static object? ResolveProjection<TSource, TDestination>()
@@ -87,7 +123,6 @@ internal static class GeneratedMapperBridge
     }
 
     private static TypedResolverCacheEntry ResolveTypedMapper<TSource, TDestination>()
-        where TDestination : new()
     {
         foreach (var resolver in ResolverProviders.Value)
         {
@@ -259,7 +294,6 @@ internal static class GeneratedMapperBridge
 }
 
 internal static class GeneratedMapperBridge<TSource, TDestination>
-    where TDestination : new()
 {
     private static readonly Func<TSource, TDestination>? Mapper = ResolveMapper();
     private static readonly Expression<Func<TSource, TDestination>>? Projection = ResolveProjection();
@@ -300,7 +334,6 @@ internal static class GeneratedMapperBridge<TSource, TDestination>
 
     private static Expression<Func<TSource, TDestination>>? ResolveProjection()
     {
-        GeneratedMapperBridge.TryResolveProjection<TSource, TDestination>(out var projection);
-        return projection;
+        return GeneratedMapperBridge.TryResolveProjectionUnconstrained<TSource, TDestination>();
     }
 }

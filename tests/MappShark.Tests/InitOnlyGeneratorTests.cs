@@ -38,6 +38,24 @@ public sealed record OrderSummaryDto
     public string Customer { get; init; } = string.Empty;
 }
 
+// Public positional records — generator should emit constructor-call syntax.
+public sealed class PersonInfo
+{
+    public string FullName { get; set; } = string.Empty;
+    public int Age { get; set; }
+}
+
+public sealed record PersonPositionalDto([property: MapFrom("FullName")] string Name, int Age);
+
+public sealed class ItemInfo
+{
+    public string Code { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public int Quantity { get; set; }
+}
+
+public sealed record ItemPositionalDto(string Code, [property: MapFrom("Price")] decimal UnitPrice, int Quantity);
+
 /// <summary>
 /// Tests for init-only / record support via the generated code path.
 /// Public types allow the source generator to emit an optimized mapper using
@@ -81,5 +99,52 @@ public sealed class InitOnlyGeneratorTests
         Assert.Equal(2, results.Count);
         Assert.Equal("A", results[0].Code);
         Assert.Equal("B", results[1].Code);
+    }
+}
+
+/// <summary>
+/// Tests for positional record support via the generated code path.
+/// The generator emits constructor-call syntax (new T(Param: val)) since positional
+/// records have no parameterless constructor.
+/// </summary>
+public sealed class PositionalRecordGeneratorTests
+{
+    [Fact]
+    public void Map_PublicPositionalRecord_MapFrom_OnParameter_MapsCorrectly()
+    {
+        var source = new PersonInfo { FullName = "Alice Smith", Age = 30 };
+        var result = Mapper.Map<PersonInfo, PersonPositionalDto>(source);
+
+        Assert.Equal("Alice Smith", result.Name);
+        Assert.Equal(30, result.Age);
+    }
+
+    [Fact]
+    public void Map_PublicPositionalRecord_MapFrom_OnMiddleParameter_MapsCorrectly()
+    {
+        var source = new ItemInfo { Code = "SKU-1", Price = 9.99m, Quantity = 5 };
+        var result = Mapper.Map<ItemInfo, ItemPositionalDto>(source);
+
+        Assert.Equal("SKU-1", result.Code);
+        Assert.Equal(9.99m, result.UnitPrice);
+        Assert.Equal(5, result.Quantity);
+    }
+
+    [Fact]
+    public void MapMany_PublicPositionalRecord_MapsCollection()
+    {
+        var sources = new[]
+        {
+            new PersonInfo { FullName = "Alice", Age = 25 },
+            new PersonInfo { FullName = "Bob", Age = 40 },
+        };
+
+        var results = Mapper.MapMany<PersonInfo, PersonPositionalDto>(sources);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("Alice", results[0].Name);
+        Assert.Equal(25, results[0].Age);
+        Assert.Equal("Bob", results[1].Name);
+        Assert.Equal(40, results[1].Age);
     }
 }

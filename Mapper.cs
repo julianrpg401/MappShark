@@ -20,7 +20,6 @@ public static class Mapper
     /// <param name="source">Source instance.</param>
     /// <returns>A mapped destination instance.</returns>
     public static TDestination Map<TSource, TDestination>(TSource source)
-        where TDestination : new()
     {
         if (source is null)
         {
@@ -49,14 +48,12 @@ public static class Mapper
     /// <typeparamref name="TDestination"/> → <typeparamref name="TSource"/>.
     /// </summary>
     public static TDestination BothWays<TSource, TDestination>(TSource source)
-        where TDestination : new()
         => Map<TSource, TDestination>(source);
 
     /// <summary>
     /// Maps each element of <paramref name="source"/> from <typeparamref name="TSource"/> to <typeparamref name="TDestination"/>.
     /// </summary>
     public static List<TDestination> MapMany<TSource, TDestination>(IEnumerable<TSource> source)
-        where TDestination : new()
     {
         if (source is null)
         {

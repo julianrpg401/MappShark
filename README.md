@@ -268,16 +268,37 @@ private static OrderDto MapPair_0(OrderEntity source)
 
 ### Positional records
 
-Positional records (`record Foo(int Bar)`) have **no parameterless constructor**, so object-initializer syntax cannot be used. The source generator detects this and falls back to the **reflection mapper** automatically — no extra configuration needed.
+Positional records (`record Foo(int Bar)`) have **no parameterless constructor**. MappShark fully supports them via generated **constructor-call syntax** — no reflection fallback required.
+
+Use `[property: MapFrom("...")]` (or `[property: MapTo("...")]`, `[property: MapIndex(n)]`) on positional parameters to configure the mapping:
 
 ```csharp
-// Positional record → handled by the reflection fallback, not the generator.
+// All properties map by name — no attributes needed.
 public record PointDto(double X, double Y);
 
-var dto = Mapper.Map<PointEntity, PointDto>(entity); // works fine
+// Remap a parameter using [property: MapFrom]
+public record OrderDto(
+    int Id,
+    [property: MapFrom("TotalAmount")] decimal Total,
+    [property: MapFrom("CustomerName")] string Customer
+);
+
+var dto = Mapper.Map<OrderEntity, OrderDto>(entity); // uses generated constructor-call code
 ```
 
-> **Tip:** To keep the generated hot path for record types, prefer records with explicit `{ get; init; }` properties over positional syntax.
+The source generator emits:
+
+```csharp
+private static OrderDto MapPair_N(OrderEntity source) =>
+    new OrderDto(
+        Id: source.Id,
+        Total: source.TotalAmount,
+        Customer: source.CustomerName);
+```
+
+> **Note:** The `[property: ...]` target specifier is required because `MapFromAttribute` targets only `Property`. The C# compiler then forwards the attribute to the synthesized property where the generator picks it up.
+
+> **Limitation:** `Mapper.Projection<TSource, TDestination>()` (LINQ expression trees) is not supported for positional records — only `Mapper.Map` and `Mapper.MapMany`.
 
 ---
 
