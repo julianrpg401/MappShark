@@ -403,6 +403,18 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
     {
         converter = null!;
 
+        // Dictionary<K,V> path — must precede IEnumerable detection because Dictionary<K,V>
+        // implements IEnumerable<KeyValuePair<K,V>>, which causes incorrect list-mapping attempts.
+        if (TryGetDictionaryKeyValueTypes(sourceMemberType, out var srcKeyType, out var srcValueType)
+            && TryGetDictionaryKeyValueTypes(destinationMemberType, out _, out var dstValueType))
+        {
+            var mapDictMethod = typeof(ReflectionMapperFactory<TSource, TDestination>)
+                .GetMethod(nameof(MapDictionaryCore), BindingFlags.NonPublic | BindingFlags.Static)!
+                .MakeGenericMethod(srcKeyType, srcValueType, dstValueType);
+            converter = value => mapDictMethod.Invoke(obj: null, parameters: new object?[] { value })!;
+            return true;
+        }
+
         if (!TryGetEnumerableElementType(sourceMemberType, out var sourceElementType)
             || !TryGetEnumerableElementType(destinationMemberType, out var destinationElementType))
         {
@@ -509,6 +521,60 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
         }
 
         return sourceType.IsClass || sourceType.IsValueType;
+    }
+
+    private static bool TryGetDictionaryKeyValueTypes(Type type, out Type keyType, out Type valueType)
+    {
+        keyType = null!;
+        valueType = null!;
+
+        // Check the type itself (handles IDictionary<K,V>, IReadOnlyDictionary<K,V> as property types)
+        if (type.IsGenericType && type.GetGenericArguments().Length == 2)
+        {
+            var def = type.GetGenericTypeDefinition();
+            if (def == typeof(IDictionary<,>) || def == typeof(IReadOnlyDictionary<,>))
+            {
+                var args = type.GetGenericArguments();
+                keyType = args[0];
+                valueType = args[1];
+                return true;
+            }
+        }
+
+        // Check interfaces (handles Dictionary<K,V> and other implementing types)
+        foreach (var iface in type.GetInterfaces())
+        {
+            if (!iface.IsGenericType || iface.GetGenericArguments().Length != 2)
+                continue;
+            var def = iface.GetGenericTypeDefinition();
+            if (def == typeof(IDictionary<,>) || def == typeof(IReadOnlyDictionary<,>))
+            {
+                var args = iface.GetGenericArguments();
+                keyType = args[0];
+                valueType = args[1];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static object? MapDictionaryCore<TKey, TSourceValue, TDestValue>(object? source) where TKey : notnull
+    {
+        if (source is null) return null;
+
+        if (source is not IEnumerable<KeyValuePair<TKey, TSourceValue>> srcDict)
+            throw new InvalidOperationException(
+                $"Cannot map dictionary: source type '{source.GetType().FullName}' does not implement IEnumerable<KeyValuePair<{typeof(TKey).FullName}, {typeof(TSourceValue).FullName}>>.");
+
+        var result = source is ICollection<KeyValuePair<TKey, TSourceValue>> col
+            ? new Dictionary<TKey, TDestValue>(col.Count)
+            : new Dictionary<TKey, TDestValue>();
+
+        foreach (var kvp in srcDict)
+            result[kvp.Key] = MapCollectionElement<TSourceValue, TDestValue>(kvp.Value);
+
+        return result;
     }
 
     private static bool TryGetEnumerableElementType(Type type, out Type elementType)

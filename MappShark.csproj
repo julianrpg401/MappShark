@@ -6,13 +6,27 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>0.3.0-preview.3</Version>
+    <Version>1.0.0</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v1.0.0
+- First stable release of MappShark.
+- Roslyn source generator emits zero-reflection mappers at compile time.
+- [MapIndex(n)]: index-based property mapping across differently named types.
+- [MapFrom("SourceProp")] / [MapTo("DestProp")]: attribute-driven name remapping.
+- Name-based fallback: properties with the same name are mapped automatically without annotations.
+- Mapper.BothWays: generates forward and reverse mappings in one call.
+- Mapper.MapMany / Mapper.ProjectMany: collection and IQueryable projection support.
+- MappSharkProfile: centralize all mapping registrations in a profile class.
+- Init-only properties and positional records fully supported via generated initializer/constructor syntax.
+- Mapping errors (missing indexes, attribute conflicts) surface as MSBuild diagnostics (MSP0xx).
+- Native AOT and trimming friendly — no runtime reflection on the hot path.
+- Targets netstandard2.0 and net8.0.
+
 v0.3.0-preview.3
 - Records and init-only properties: source generator now emits object-initializer syntax for destination types with init-only setters (record { get; init; }).
 - [MapFrom] / [MapTo] work seamlessly with init-only destination properties.

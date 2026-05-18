@@ -352,6 +352,65 @@ Supported collection targets:
 | `List<T>` | ✅ |
 | `IList<T>`, `ICollection<T>`, `IEnumerable<T>` | ✅ |
 | `T[]` (arrays) | ✅ |
+| `Dictionary<TKey, TValue>` | ✅ |
+| `IDictionary<TKey, TValue>` | ✅ |
+| `IReadOnlyDictionary<TKey, TValue>` | ✅ |
+
+---
+
+## Dictionary Mappings *(new in 1.0.0)*
+
+MappShark maps `Dictionary<TKey, TValue>` properties end-to-end — both keys and values are handled without any extra configuration.
+
+### Simple value types
+
+```csharp
+public class PriceListEntity
+{
+    [MapIndex(0)] public Dictionary<string, decimal> Prices { get; set; } = new();
+}
+
+public class PriceListDto
+{
+    [MapIndex(0)] public Dictionary<string, decimal> Prices { get; set; } = new();
+}
+
+var entity = new PriceListEntity
+{
+    Prices = new() { ["apple"] = 1.20m, ["banana"] = 0.80m }
+};
+
+var dto = Mapper.Map<PriceListEntity, PriceListDto>(entity);
+// dto.Prices["apple"]  == 1.20m
+// dto.Prices["banana"] == 0.80m
+```
+
+### Nested object values
+
+When the value type of source and destination differ but are themselves a mappable pair, MappShark recursively generates a mapper for the value type automatically:
+
+```csharp
+public class CatalogEntity
+{
+    [MapIndex(0)] public Dictionary<string, ProductEntity> Items { get; set; } = new();
+}
+
+public class CatalogDto
+{
+    [MapIndex(0)] public Dictionary<string, ProductDto> Items { get; set; } = new();
+}
+
+var dto = Mapper.Map<CatalogEntity, CatalogDto>(catalog);
+// Each ProductEntity value is mapped to ProductDto via a generated mapper.
+```
+
+### Supported destination types
+
+The destination property can be declared as `Dictionary<K,V>`, `IDictionary<K,V>`, or `IReadOnlyDictionary<K,V>`. The source side only needs to implement one of those interfaces (e.g., `SortedDictionary<K,V>` works as a source).
+
+> **Rules:**
+> - Keys must be directly assignable (same type or implicit conversion). Incompatible keys produce a build error (`MSP004`).
+> - Dictionary properties are excluded from `Mapper.Projection` (IQueryable) expressions — `MSP013` warning is emitted.
 
 ---
 

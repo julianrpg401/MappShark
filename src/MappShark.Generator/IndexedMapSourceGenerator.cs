@@ -921,6 +921,70 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         collectionCandidate = false;
         inlineCollection = null;
 
+        // Dictionary<K,V> path — must precede IEnumerable detection because Dictionary<K,V>
+        // implements IEnumerable<KeyValuePair<K,V>>, which would otherwise route it through the
+        // list helpers and incorrectly fire MSP011.
+        if (TryGetDictionaryKeyValueTypes(sourceProperty.Type, out var srcDictKeyType, out var srcDictValueType)
+            && TryGetDictionaryKeyValueTypes(destinationProperty.Type, out var dstDictKeyType, out var dstDictValueType)
+            && IsSupportedDictionaryDestination(destinationProperty.Type))
+        {
+            collectionCandidate = true;
+
+            var keyConversion = compilation.ClassifyConversion(srcDictKeyType, dstDictKeyType);
+            if (!keyConversion.Exists || !keyConversion.IsImplicit)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(
+                    IncompatibleTypeDescriptor,
+                    GetLocationOrFallback(destinationProperty, pair.InvocationLocation),
+                    index,
+                    pair.SourceType.ToDisplayString(),
+                    sourceProperty.Name,
+                    sourceProperty.Type.ToDisplayString(),
+                    pair.DestinationType.ToDisplayString(),
+                    destinationProperty.Name,
+                    destinationProperty.Type.ToDisplayString()));
+                return false;
+            }
+
+            var srcKeyFqn = NormalizeTypeForPair(srcDictKeyType).ToDisplayString(FullyQualifiedTypeFormat);
+            var srcValFqn = NormalizeTypeForPair(srcDictValueType).ToDisplayString(FullyQualifiedTypeFormat);
+            var dstValFqn = NormalizeTypeForPair(dstDictValueType).ToDisplayString(FullyQualifiedTypeFormat);
+
+            var valueConversion = compilation.ClassifyConversion(srcDictValueType, dstDictValueType);
+            string valueProjection;
+            if (valueConversion.Exists && valueConversion.IsImplicit)
+            {
+                valueProjection = "static v => v";
+            }
+            else if (IsNestedCandidate(srcDictValueType, dstDictValueType) && CanConstructDestinationType(dstDictValueType))
+            {
+                discoveredDependencies.Add(new TypePair(
+                    NormalizeTypeForPair(srcDictValueType),
+                    NormalizeTypeForPair(dstDictValueType)));
+                var valCanBeNull = CanBeNull(srcDictValueType);
+                valueProjection = valCanBeNull
+                    ? $"static v => v is null ? default({dstValFqn})! : MapKnown<{srcValFqn}, {dstValFqn}>(v)"
+                    : $"static v => MapKnown<{srcValFqn}, {dstValFqn}>(v)";
+            }
+            else
+            {
+                context.ReportDiagnostic(Diagnostic.Create(
+                    IncompatibleTypeDescriptor,
+                    GetLocationOrFallback(destinationProperty, pair.InvocationLocation),
+                    index,
+                    pair.SourceType.ToDisplayString(),
+                    sourceProperty.Name,
+                    sourceProperty.Type.ToDisplayString(),
+                    pair.DestinationType.ToDisplayString(),
+                    destinationProperty.Name,
+                    destinationProperty.Type.ToDisplayString()));
+                return false;
+            }
+
+            expression = $"MapDictionary<{srcKeyFqn}, {srcValFqn}, {dstValFqn}>({sourceAccess}, {valueProjection})";
+            return true;
+        }
+
         if (!TryGetEnumerableElementType(sourceProperty.Type, out var sourceElementType)
             || !TryGetEnumerableElementType(destinationProperty.Type, out var destinationElementType))
         {
@@ -1466,6 +1530,52 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             && destinationType.TypeKind is TypeKind.Class or TypeKind.Struct;
     }
 
+    private static bool TryGetDictionaryKeyValueTypes(ITypeSymbol type, out ITypeSymbol keyType, out ITypeSymbol valueType)
+    {
+        keyType = null!;
+        valueType = null!;
+
+        // Check the type itself (handles IDictionary<K,V> and IReadOnlyDictionary<K,V> as property types)
+        if (type is INamedTypeSymbol selfNamed && selfNamed.IsGenericType && selfNamed.TypeArguments.Length == 2)
+        {
+            var selfUnbound = selfNamed.ConstructUnboundGenericType().ToDisplayString();
+            if (selfUnbound == "System.Collections.Generic.IDictionary<,>" ||
+                selfUnbound == "System.Collections.Generic.IReadOnlyDictionary<,>")
+            {
+                keyType = selfNamed.TypeArguments[0];
+                valueType = selfNamed.TypeArguments[1];
+                return true;
+            }
+        }
+
+        // Check AllInterfaces (handles Dictionary<K,V> and other implementing types)
+        foreach (var iface in type.AllInterfaces)
+        {
+            if (!iface.IsGenericType || iface.TypeArguments.Length != 2)
+                continue;
+            var unbound = iface.ConstructUnboundGenericType().ToDisplayString();
+            if (unbound == "System.Collections.Generic.IDictionary<,>" ||
+                unbound == "System.Collections.Generic.IReadOnlyDictionary<,>")
+            {
+                keyType = iface.TypeArguments[0];
+                valueType = iface.TypeArguments[1];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSupportedDictionaryDestination(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol namedType || !namedType.IsGenericType || namedType.TypeArguments.Length != 2)
+            return false;
+        var unbound = namedType.ConstructUnboundGenericType().ToDisplayString();
+        return unbound == "System.Collections.Generic.Dictionary<,>" ||
+               unbound == "System.Collections.Generic.IDictionary<,>" ||
+               unbound == "System.Collections.Generic.IReadOnlyDictionary<,>";
+    }
+
     private static bool TryGetEnumerableElementType(ITypeSymbol type, out ITypeSymbol elementType)
     {
         elementType = null!;
@@ -1836,6 +1946,23 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         builder.AppendLine("            for (var i = 0; i < source.Count; i++)");
         builder.AppendLine("            {");
         builder.AppendLine("                result.Add(projector(source[i]));");
+        builder.AppendLine("            }");
+        builder.AppendLine();
+        builder.AppendLine("            return result;");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        private static Dictionary<TKey, TDestValue>? MapDictionary<TKey, TSourceValue, TDestValue>(IEnumerable<KeyValuePair<TKey, TSourceValue>>? source, Func<TSourceValue, TDestValue> projector)");
+        builder.AppendLine("            where TKey : notnull");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (source is null)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                return null;");
+        builder.AppendLine("            }");
+        builder.AppendLine();
+        builder.AppendLine("            var result = source is ICollection<KeyValuePair<TKey, TSourceValue>> col ? new Dictionary<TKey, TDestValue>(col.Count) : new Dictionary<TKey, TDestValue>();");
+        builder.AppendLine("            foreach (var kvp in source)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                result[kvp.Key] = projector(kvp.Value);");
         builder.AppendLine("            }");
         builder.AppendLine();
         builder.AppendLine("            return result;");
