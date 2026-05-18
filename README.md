@@ -17,16 +17,19 @@ The table below scores MappShark against the most popular .NET object-mapping li
 
 | Criterion | AutoMapper | Mapster | Mapperly | **MappShark** |
 |---|:---:|:---:|:---:|:---:|
-| **Runtime performance** | 30 | 65 | 95 | **95** |
-| **Startup / warm-up overhead** | 25 | 55 | 95 | **90** |
-| **Compile-time safety** | 15 | 20 | 85 | **95** |
-| **Native AOT / trimming support** | 15 | 40 | 95 | **95** |
-| **Configuration simplicity** | 50 | 70 | 65 | **85** |
-| **Name-based automatic mapping** | 90 | 85 | 80 | **80** |
-| **Custom type converters** | 90 | 80 | 55 | **75** |
+| **Runtime performance** ¹ | 50 | 89 | 96 | **94** |
+| **Startup / warm-up overhead** | 30 | 55 | 95 | **90** |
+| **Compile-time safety** | 15 | 20 | 80 | **90** |
+| **Native AOT / trimming support** | 15 | 40 | 95 | **90** |
+| **Configuration simplicity** | 50 | 65 | 60 | **75** |
+| **Name-based automatic mapping** | 90 | 85 | 80 | **75** |
+| **Custom type converters** | 90 | 80 | 65 | **75** |
 | **Collection & dictionary mapping** | 85 | 80 | 70 | **80** |
 | **IQueryable / EF Core projections** | 85 | 80 | 25 | **75** |
 | **Records & init-only support** | 55 | 65 | 85 | **90** |
+
+> ¹ Score derived from real BenchmarkDotNet results (net8.0, .NET 8.0.27, Intel i5-4430S):
+> ManualMapping 427 ns · **MappShark 456 ns (1.07×)** · Mapperly 443 ns (1.04×) · Mapster 483 ns (1.13×) · AutoMapper 854 ns (2.00×)
 
 **Key takeaways:**
 - **AutoMapper** and **Mapster** are mature and flexible but rely heavily on runtime reflection, making them incompatible with Native AOT and carrying significant startup costs.
@@ -117,8 +120,6 @@ private static UserDto MapPair_0(UserEntity source)
 ```
 
 At runtime, `Mapper.Map` resolves to this method via a cached static delegate. **Zero reflection. Zero allocations beyond the destination object itself.**
-
-At runtime `Mapper.Map` resolves to this method via a cached static delegate. **Zero reflection. Zero allocations beyond the destination object itself.**
 
 For `init`-only properties and records, object-initializer or constructor-call syntax is emitted instead — the only valid way to assign those members after construction.
 
