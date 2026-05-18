@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <PackageIcon>MappShark.png</PackageIcon>
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -73,6 +74,7 @@ v0.2.0-preview.1
     <None Remove="benchmarks\**" />
     <None Remove="nupkg-out\**" />
     <EmbeddedResource Remove="src\**;tests\**;benchmarks\**" />
+    <None Include="MappShark.png" Pack="true" PackagePath="\" />
     <None Include="README.md" Pack="true" PackagePath="/" />
     <None Include="LICENSE" Pack="true" PackagePath="/" />
     <None Include="src\MappShark.Generator\bin\$(Configuration)\netstandard2.0\MappShark.Generator.dll"
