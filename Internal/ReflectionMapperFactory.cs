@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -8,6 +9,10 @@ namespace MappShark.Internal;
 internal static class ReflectionMapperFactory<TSource, TDestination>
 {
     private static readonly Type GenericConverterContract = typeof(IMapValueConverter<,>);
+
+    // Cache of destination PropertyInfo per ForMember override name, populated lazily.
+    private static readonly ConcurrentDictionary<string, PropertyInfo?> ForMemberPropCache =
+        new(StringComparer.Ordinal);
 
     public static readonly Func<TSource, TDestination> Map = BuildMapper();
 
@@ -35,6 +40,8 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
                 var converted = pair.Converter(value);
                 pair.Destination.SetValue(destination, converted);
             }
+
+            ApplyForMemberOverrides(source!, (object)destination!);
 
             return destination;
         };
@@ -107,8 +114,36 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
                 pair.Destination.SetValue(destination, converted);
             }
 
+            // ForMember overrides are not applied to positional record constructor parameters.
+            // The generated code path handles ForMember for positional records via emitted expressions.
+
             return destination;
         };
+    }
+
+    /// <summary>
+    /// Applies ForMember overrides registered in <see cref="ProfileMappingRegistry"/> to
+    /// <paramref name="destination"/> after standard property-pair mapping has run.
+    /// ForMember wins over any same-named standard mapping because it is applied last.
+    /// </summary>
+    private static void ApplyForMemberOverrides(TSource source, object destination)
+    {
+        var overrides = ProfileMappingRegistry.GetOverrides(typeof(TSource), typeof(TDestination));
+        if (overrides is null || overrides.Count == 0)
+            return;
+
+        foreach (var over in overrides)
+        {
+            var prop = ForMemberPropCache.GetOrAdd(
+                over.PropertyName,
+                name => typeof(TDestination).GetProperty(name, BindingFlags.Instance | BindingFlags.Public));
+
+            if (prop is null || prop.SetMethod is null)
+                continue;
+
+            var value = over.Resolver(source!);
+            prop.SetValue(destination, value);
+        }
     }
 
     private static IReadOnlyList<PropertyPair> BuildPropertyPairs()

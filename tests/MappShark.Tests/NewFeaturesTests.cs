@@ -353,4 +353,139 @@ public sealed class NewFeaturesTests
         public List<PostImageItem> Convert(List<string> source)
             => source.Select(url => new PostImageItem { Url = url }).ToList();
     }
+
+    // ──────────────────────────────────────────────────────────────────────────────
+    // Feature 6: ForMember in MappSharkProfile
+    // ──────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ForMember_NestedPath_MapsViaReflection()
+    {
+        Mapper.UseProfile<NestedPathProfile>();
+
+        var source = new PostEntity
+        {
+            Id = 1,
+            Content = "Hello world",
+            User = new AuthorInfo { UserName = "ada_lovelace" }
+        };
+
+        var dto = Mapper.Map<PostEntity, PostSummaryDto>(source);
+
+        Assert.Equal(1, dto.Id);
+        Assert.Equal("Hello world", dto.Content);
+        Assert.Equal("ada_lovelace", dto.AuthorUserName);
+    }
+
+    [Fact]
+    public void ForMember_ComputedAggregate_MapsViaReflection()
+    {
+        Mapper.UseProfile<AggregateProfile>();
+
+        var source = new PostWithVotes
+        {
+            Title = "MappShark rocks",
+            Votes = new List<Vote>
+            {
+                new Vote { IsRelevant = true },
+                new Vote { IsRelevant = false },
+                new Vote { IsRelevant = true }
+            }
+        };
+
+        var dto = Mapper.Map<PostWithVotes, PostVoteDto>(source);
+
+        Assert.Equal("MappShark rocks", dto.Title);
+        Assert.Equal(2, dto.RelevantVoteCount);
+    }
+
+    [Fact]
+    public void ForMember_TakesPriorityOverNameFallback_ViaReflection()
+    {
+        Mapper.UseProfile<OverrideNameFallbackProfile>();
+
+        var source = new DualNameSource { DisplayName = "wrong", CanonicalName = "right" };
+        var dto = Mapper.Map<DualNameSource, DualNameDto>(source);
+
+        // ForMember maps CanonicalName → DisplayName, overriding the same-name fallback for DisplayName
+        Assert.Equal("right", dto.DisplayName);
+    }
+
+    // ── Types for ForMember tests ──────────────────────────────────────────────
+
+    private sealed class AuthorInfo
+    {
+        public string UserName { get; set; } = string.Empty;
+    }
+
+    private sealed class PostEntity
+    {
+        public int Id { get; set; }
+        public string Content { get; set; } = string.Empty;
+        public AuthorInfo? User { get; set; }
+    }
+
+    private sealed class PostSummaryDto
+    {
+        public int Id { get; set; }
+        public string Content { get; set; } = string.Empty;
+        public string AuthorUserName { get; set; } = string.Empty;
+    }
+
+    private sealed class Vote
+    {
+        public bool IsRelevant { get; set; }
+    }
+
+    private sealed class PostWithVotes
+    {
+        public string Title { get; set; } = string.Empty;
+        public List<Vote> Votes { get; set; } = new();
+    }
+
+    private sealed class PostVoteDto
+    {
+        public string Title { get; set; } = string.Empty;
+        public int RelevantVoteCount { get; set; }
+    }
+
+    private sealed class DualNameSource
+    {
+        public string DisplayName { get; set; } = string.Empty;
+        public string CanonicalName { get; set; } = string.Empty;
+    }
+
+    private sealed class DualNameDto
+    {
+        public string DisplayName { get; set; } = string.Empty;
+    }
+
+    // ── Profiles ─────────────────────────────────────────────────────────────────
+
+    private sealed class NestedPathProfile : MappSharkProfile
+    {
+        public NestedPathProfile()
+        {
+            CreateMap<PostEntity, PostSummaryDto>()
+                .ForMember(dto => dto.AuthorUserName, src => src.User!.UserName);
+        }
+    }
+
+    private sealed class AggregateProfile : MappSharkProfile
+    {
+        public AggregateProfile()
+        {
+            CreateMap<PostWithVotes, PostVoteDto>()
+                .ForMember(dto => dto.RelevantVoteCount, src => src.Votes.Count(v => v.IsRelevant));
+        }
+    }
+
+    private sealed class OverrideNameFallbackProfile : MappSharkProfile
+    {
+        public OverrideNameFallbackProfile()
+        {
+            CreateMap<DualNameSource, DualNameDto>()
+                .ForMember(dto => dto.DisplayName, src => src.CanonicalName);
+        }
+    }
 }

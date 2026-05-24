@@ -7,13 +7,18 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>1.1.0</Version>
+    <Version>2.0.0</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v2.0.0
+- New: ForMember in MappSharkProfile — define custom property mappings with lambda expressions, including nested paths (src => src.User.UserName) and computed values (src => src.PostVotes!.Count(v => v.IsRelevant)). Chain .ForMember(...) on CreateMap&lt;&gt;() inside any profile.
+- New: Mapper.UseProfile&lt;TProfile&gt;() — registers a profile's ForMember delegates for the reflection-based mapping path. Not required when the Roslyn source generator is active.
+- Breaking: MappSharkProfile.CreateMap&lt;TSource, TDestination&gt;() now returns IMapConfiguration&lt;TSource, TDestination&gt; instead of void. Existing profiles that ignore the return value continue to compile without changes.
+
 v1.1.0
 - New: [MapConverter] now works with [MapTo] on source properties (and record parameters). Converters placed on the source side are applied during both generated and reflection-based mapping, keeping the destination type free of any MappShark attributes.
 
@@ -67,6 +72,7 @@ v0.2.0-preview.1
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PackageOutputPath>$(MSBuildProjectDirectory)/nupkg-out</PackageOutputPath>
   </PropertyGroup>
 
   <ItemGroup>

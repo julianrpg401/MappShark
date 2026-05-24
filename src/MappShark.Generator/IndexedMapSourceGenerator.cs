@@ -257,7 +257,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             sourceType: NormalizeTypeForPair(methodSymbol.TypeArguments[0]),
             destinationType: NormalizeTypeForPair(methodSymbol.TypeArguments[1]),
             invocationLocation: invocation.GetLocation(),
-            bothWays: false);
+            bothWays: false,
+            forMembers: CollectForMemberChain(invocation));
     }
 
     private static bool IsCandidateInvocation(SyntaxNode node)
@@ -365,7 +366,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
         foreach (var invocation in invocations)
         {
-            AddPendingPair(pairs, pendingPairs, invocation.SourceType, invocation.DestinationType, invocation.InvocationLocation);
+            AddPendingPair(pairs, pendingPairs, invocation.SourceType, invocation.DestinationType, invocation.InvocationLocation, invocation.ForMembers);
             if (invocation.BothWays)
             {
                 AddPendingPair(pairs, pendingPairs, invocation.DestinationType, invocation.SourceType, invocation.InvocationLocation);
@@ -429,7 +430,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         Queue<MapPairContext> pendingPairs,
         ITypeSymbol sourceType,
         ITypeSymbol destinationType,
-        Location location)
+        Location location,
+        ImmutableArray<ForMemberInfo> forMembers = default)
     {
         var normalizedSourceType = NormalizeTypeForPair(sourceType);
         var normalizedDestinationType = NormalizeTypeForPair(destinationType);
@@ -445,7 +447,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             return;
         }
 
-        var pairContext = new MapPairContext(normalizedSourceType, normalizedDestinationType, location);
+        var pairContext = new MapPairContext(normalizedSourceType, normalizedDestinationType, location, forMembers);
         knownPairs[key] = pairContext;
         pendingPairs.Enqueue(pairContext);
     }
@@ -547,6 +549,27 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
             assignments.Add(assignment);
             destinationMappedNames.Add(destinationProperty.Name);
+        }
+
+        // ForMember overrides declared in MappSharkProfile constructors.
+        // Priority: above [MapFrom]/[MapTo]/name-fallback, below [MapIndex].
+        // The verbatim source expression is emitted directly into the generated method body.
+        foreach (var forMember in pair.ForMembers)
+        {
+            var destProp = GetAllProperties(pair.DestinationType)
+                .FirstOrDefault(p => !p.IsStatic
+                    && string.Equals(p.Name, forMember.DestinationPropertyName, StringComparison.OrdinalIgnoreCase));
+
+            if (destProp is null)
+                continue;
+
+            // Skip if already covered by [MapIndex].
+            if (destinationMappedNames.Contains(destProp.Name))
+                continue;
+
+            var isInitOnly = destProp.SetMethod?.IsInitOnly == true;
+            assignments.Add(new PropertyAssignment(-2, destProp.Name, forMember.SourceExpression, isInitOnly, isForMember: true));
+            destinationMappedNames.Add(destProp.Name);
         }
 
         // Name-based fallback + [MapFrom]/[MapTo] overrides.
@@ -1195,6 +1218,13 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         {
             var valueExpr = assignment.ValueExpression;
 
+            // Skip ForMember assignments — their expressions are arbitrary C# that may not be
+            // translatable to expression trees (e.g. method calls, aggregates).
+            if (assignment.IsForMember)
+            {
+                continue;
+            }
+
             // Skip converter-based assignments — not translatable to expression trees
             if (valueExpr.StartsWith("ConvertWith<", StringComparison.Ordinal))
             {
@@ -1745,143 +1775,57 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         builder.AppendLine("using System.Collections.Generic;");
         builder.AppendLine("using System.Linq;");
         builder.AppendLine("using System.Linq.Expressions;");
+        builder.AppendLine("using System.Runtime.CompilerServices;");
         builder.AppendLine();
         builder.AppendLine("namespace MappShark.Generated");
         builder.AppendLine("{");
         builder.AppendLine("    internal static class IndexedMapResolver");
         builder.AppendLine("    {");
-        // Untyped mappers: nested class so the dictionary is only initialized when TryResolve (untyped path) is first called,
-        // not when TryResolveTyped (typed hot path) is first called. Avoids creating N box delegates at startup.
-        builder.AppendLine("        private static class UntypedMappersCache");
+        builder.AppendLine("        [ModuleInitializer]");
+        builder.AppendLine("        internal static void Register()");
         builder.AppendLine("        {");
-        builder.AppendLine("            internal static readonly Dictionary<(Type Source, Type Destination), Func<object, object>> Mappers = new()");
-        builder.AppendLine("            {");
 
-        for (var i = 0; i < pairs.Count; i++)
+        foreach (var pair in pairs)
         {
-            var pair = pairs[i];
-            var trailingComma = i == pairs.Count - 1 ? string.Empty : ",";
-
-            builder.Append("                [(typeof(");
-            builder.Append(pair.SourceTypeName);
-            builder.Append("), typeof(");
-            builder.Append(pair.DestinationTypeName);
-            builder.Append("))] = static source => ");
-            builder.Append(pair.MethodName);
-            builder.Append("((");
-            builder.Append(pair.SourceTypeName);
-            builder.Append(")source)");
-            builder.AppendLine(trailingComma);
-        }
-
-        builder.AppendLine("            };");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public static bool TryResolve(Type sourceType, Type destinationType, out Func<object, object> mapper)");
-        builder.AppendLine("        {");
-        builder.AppendLine("            return UntypedMappersCache.Mappers.TryGetValue((sourceType, destinationType), out mapper!);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        builder.AppendLine("        public static bool TryResolveTyped<TSource, TDestination>(out Func<TSource, TDestination> mapper)");
-        builder.AppendLine("            where TDestination : new()");
-        builder.AppendLine("        {");
-
-        for (var i = 0; i < pairs.Count; i++)
-        {
-            var pair = pairs[i];
-            // Positional records use the untyped path (no new() constraint) — skip TryResolveTyped
-            if (pair.UseConstructorCall) continue;
-            builder.Append("            if (typeof(TSource) == typeof(");
-            builder.Append(pair.SourceTypeName);
-            builder.Append(") && typeof(TDestination) == typeof(");
-            builder.Append(pair.DestinationTypeName);
-            builder.AppendLine("))");
-            builder.AppendLine("            {");
-            builder.Append("                mapper = (Func<TSource, TDestination>)(object)(Func<");
+            builder.Append("            global::MappShark.Internal.MapperRegistry.Register<");
             builder.Append(pair.SourceTypeName);
             builder.Append(", ");
             builder.Append(pair.DestinationTypeName);
-            builder.Append(">)");
+            builder.Append(">(");
             builder.Append(pair.MethodName);
-            builder.AppendLine(";");
-            builder.AppendLine("                return true;");
-            builder.AppendLine("            }");
+            builder.AppendLine(");");
         }
 
-        builder.AppendLine();
-        builder.AppendLine("            mapper = default!;");
-        builder.AppendLine("            return false;");
-        builder.AppendLine("        }");
-        builder.AppendLine();
-        // TryResolveProjection
-        builder.AppendLine("        public static bool TryResolveProjection<TSource, TDestination>(out Expression<Func<TSource, TDestination>> projection)");
-        builder.AppendLine("            where TDestination : new()");
-        builder.AppendLine("        {");
-
-        for (var i = 0; i < pairs.Count; i++)
+        foreach (var pair in pairs)
         {
-            var pair = pairs[i];
-            if (pair.UseConstructorCall) continue; // positional records have no projection support
-            if (pair.ProjectionAssignments is null)
-                continue;
-            builder.Append("            if (typeof(TSource) == typeof(");
+            if (pair.ProjectionAssignments is null) continue;
+            builder.Append("            global::MappShark.Internal.MapperRegistry.RegisterProjection<");
             builder.Append(pair.SourceTypeName);
-            builder.Append(") && typeof(TDestination) == typeof(");
+            builder.Append(", ");
             builder.Append(pair.DestinationTypeName);
-            builder.AppendLine("))");
-            builder.AppendLine("            {");
-            builder.Append("                projection = (Expression<Func<TSource, TDestination>>)(object)");
-            builder.Append("ProjectionCache_");
+            builder.Append(">(ProjectionCache_");
             builder.Append(pair.MethodName);
-            builder.AppendLine(".Expr;");
-            builder.AppendLine("                return true;");
-            builder.AppendLine("            }");
+            builder.AppendLine(".Expr);");
         }
 
-        builder.AppendLine();
-        builder.AppendLine("            projection = default!;");
-        builder.AppendLine("            return false;");
         builder.AppendLine("        }");
         builder.AppendLine();
-        // ProjectKnown helper (evaluates at runtime via the projection cache, not for expression tree nesting — 
-        // nested projections are inlined during code generation)
+        // MapKnown helper — uses a static cached delegate per type-pair (O(1) field access on
+        // the hot path). The static field is initialized once via the registry; no new()
+        // constraint is needed because MapperRegistry is constraint-free.
         builder.AppendLine("        private static TDestination MapKnown<TSource, TDestination>(TSource source)");
-        builder.AppendLine("            where TDestination : new()");
         builder.AppendLine("        {");
         builder.AppendLine("            return KnownMapCache<TSource, TDestination>.Map(source);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        private static class KnownMapCache<TSource, TDestination>");
-        builder.AppendLine("            where TDestination : new()");
         builder.AppendLine("        {");
-        builder.AppendLine("            public static readonly Func<TSource, TDestination> Map = Resolve();");
-        builder.AppendLine();
-        builder.AppendLine("            private static Func<TSource, TDestination> Resolve()");
+        builder.AppendLine("            public static readonly global::System.Func<TSource, TDestination> Map = Resolve();");
+        builder.AppendLine("            private static global::System.Func<TSource, TDestination> Resolve()");
         builder.AppendLine("            {");
-
-        for (var i = 0; i < pairs.Count; i++)
-        {
-            var pair = pairs[i];
-            // KnownMapCache has where TDestination : new() — positional records use the untyped path
-            if (pair.UseConstructorCall) continue;
-            builder.Append("                if (typeof(TSource) == typeof(");
-            builder.Append(pair.SourceTypeName);
-            builder.Append(") && typeof(TDestination) == typeof(");
-            builder.Append(pair.DestinationTypeName);
-            builder.AppendLine("))");
-            builder.AppendLine("                {");
-            builder.Append("                    return (Func<TSource, TDestination>)(object)(Func<");
-            builder.Append(pair.SourceTypeName);
-            builder.Append(", ");
-            builder.Append(pair.DestinationTypeName);
-            builder.Append(">)");
-            builder.Append(pair.MethodName);
-            builder.AppendLine(";");
-            builder.AppendLine("                }");
-        }
-
-        builder.AppendLine();
-        builder.AppendLine("                return static source => global::MappShark.Mapper.Map<TSource, TDestination>(source!);");
+        builder.AppendLine("                if (global::MappShark.Internal.MapperRegistry.TryGetMapper<TSource, TDestination>(out var fn))");
+        builder.AppendLine("                    return fn;");
+        builder.AppendLine("                return static src => global::MappShark.Mapper.Map<TSource, TDestination>(src!);");
         builder.AppendLine("            }");
         builder.AppendLine("        }");
         builder.AppendLine();
@@ -2284,12 +2228,13 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private readonly struct MapInvocationInfo
     {
-        public MapInvocationInfo(ITypeSymbol sourceType, ITypeSymbol destinationType, Location invocationLocation, bool bothWays = false)
+        public MapInvocationInfo(ITypeSymbol sourceType, ITypeSymbol destinationType, Location invocationLocation, bool bothWays = false, ImmutableArray<ForMemberInfo> forMembers = default)
         {
             SourceType = sourceType;
             DestinationType = destinationType;
             InvocationLocation = invocationLocation;
             BothWays = bothWays;
+            ForMembers = forMembers.IsDefault ? ImmutableArray<ForMemberInfo>.Empty : forMembers;
         }
 
         public ITypeSymbol SourceType { get; }
@@ -2299,6 +2244,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         public Location InvocationLocation { get; }
 
         public bool BothWays { get; }
+
+        public ImmutableArray<ForMemberInfo> ForMembers { get; }
     }
 
     private readonly struct TypePair
@@ -2338,11 +2285,12 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private sealed class MapPairContext
     {
-        public MapPairContext(ITypeSymbol sourceType, ITypeSymbol destinationType, Location invocationLocation)
+        public MapPairContext(ITypeSymbol sourceType, ITypeSymbol destinationType, Location invocationLocation, ImmutableArray<ForMemberInfo> forMembers = default)
         {
             SourceType = sourceType;
             DestinationType = destinationType;
             InvocationLocation = invocationLocation;
+            ForMembers = forMembers.IsDefault ? ImmutableArray<ForMemberInfo>.Empty : forMembers;
         }
 
         public ITypeSymbol SourceType { get; }
@@ -2350,6 +2298,8 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         public ITypeSymbol DestinationType { get; }
 
         public Location InvocationLocation { get; }
+
+        public ImmutableArray<ForMemberInfo> ForMembers { get; }
     }
 
     private sealed class GeneratedPair
@@ -2399,15 +2349,35 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         public INamedTypeSymbol? ConverterType { get; }
     }
 
+    /// <summary>A custom ForMember override declared in a <see cref="MappSharkProfile"/> constructor.</summary>
+    private readonly struct ForMemberInfo
+    {
+        public ForMemberInfo(string destinationPropertyName, string sourceExpression)
+        {
+            DestinationPropertyName = destinationPropertyName;
+            SourceExpression = sourceExpression;
+        }
+
+        /// <summary>Name of the destination property this override maps into.</summary>
+        public string DestinationPropertyName { get; }
+
+        /// <summary>
+        /// The source expression extracted verbatim from the resolver lambda body,
+        /// with the lambda parameter renamed to <c>source</c> to match the generated method signature.
+        /// </summary>
+        public string SourceExpression { get; }
+    }
+
     private readonly struct PropertyAssignment
     {
-        public PropertyAssignment(int index, string destinationPropertyName, string valueExpression, bool isInitOnly = false)
+        public PropertyAssignment(int index, string destinationPropertyName, string valueExpression, bool isInitOnly = false, bool isForMember = false)
         {
             Index = index;
             DestinationPropertyName = destinationPropertyName;
             ValueExpression = valueExpression;
             InlineCollection = null;
             IsInitOnly = isInitOnly;
+            IsForMember = isForMember;
         }
 
         public PropertyAssignment(int index, string destinationPropertyName, string valueExpression, InlineCollectionData inlineCollection, bool isInitOnly = false)
@@ -2417,6 +2387,7 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             ValueExpression = valueExpression;
             InlineCollection = inlineCollection;
             IsInitOnly = isInitOnly;
+            IsForMember = false;
         }
 
         public int Index { get; }
@@ -2428,6 +2399,10 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         public InlineCollectionData? InlineCollection { get; }
 
         public bool IsInitOnly { get; }
+
+        /// <summary>True when this assignment was generated from a <c>ForMember</c> override in a profile.
+        /// ForMember assignments use verbatim source expressions and are excluded from IQueryable projections.</summary>
+        public bool IsForMember { get; }
     }
 
     private sealed class InlineCollectionData
@@ -2459,5 +2434,97 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
         /// <summary>Expression using "source." prefix, safe for expression trees (no delegate calls).</summary>
         public string ValueExpression { get; }
+    }
+
+    // ─── ForMember helpers ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Walks up the parent chain of a <c>CreateMap&lt;TSource, TDest&gt;()</c> invocation
+    /// and collects any chained <c>.ForMember(...)</c> calls.
+    /// </summary>
+    private static ImmutableArray<ForMemberInfo> CollectForMemberChain(InvocationExpressionSyntax createMapInvocation)
+    {
+        var builder = ImmutableArray.CreateBuilder<ForMemberInfo>();
+
+        // The CreateMap() invocation is the innermost expression. Walk up its parent nodes looking
+        // for MemberAccess("ForMember") → InvocationExpression pairs.
+        SyntaxNode? current = createMapInvocation.Parent;
+        while (current is MemberAccessExpressionSyntax memberAccess
+            && memberAccess.Name.Identifier.ValueText == "ForMember"
+            && memberAccess.Parent is InvocationExpressionSyntax forMemberInvocation
+            && forMemberInvocation.ArgumentList.Arguments.Count == 2)
+        {
+            if (TryExtractForMemberInfo(forMemberInvocation, out var info))
+                builder.Add(info);
+
+            current = forMemberInvocation.Parent;
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Extracts a <see cref="ForMemberInfo"/> from a <c>ForMember(dest =&gt; dest.Prop, src =&gt; expr)</c>
+    /// invocation. Returns false if the syntax does not match the expected pattern.
+    /// </summary>
+    private static bool TryExtractForMemberInfo(InvocationExpressionSyntax forMemberInvocation, out ForMemberInfo info)
+    {
+        info = default;
+
+        var args = forMemberInvocation.ArgumentList.Arguments;
+        if (args.Count != 2)
+            return false;
+
+        // First arg: dest => dest.PropertyName
+        if (args[0].Expression is not SimpleLambdaExpressionSyntax destLambda)
+            return false;
+
+        if (destLambda.Body is not MemberAccessExpressionSyntax destMemberAccess)
+            return false;
+
+        var destPropertyName = destMemberAccess.Name.Identifier.ValueText;
+        if (string.IsNullOrEmpty(destPropertyName))
+            return false;
+
+        // Second arg: src => <expr>
+        if (args[1].Expression is not SimpleLambdaExpressionSyntax srcLambda)
+            return false;
+
+        var paramName = srcLambda.Parameter.Identifier.ValueText;
+        var bodyNode = srcLambda.Body;
+
+        // Rename the lambda parameter to "source" so the emitted expression matches the generated method signature.
+        SyntaxNode renamed = string.Equals(paramName, "source", StringComparison.Ordinal)
+            ? bodyNode
+            : new IdentifierRenamer(paramName, "source").Visit(bodyNode)!;
+
+        var sourceExpression = renamed.ToFullString().Trim();
+
+        info = new ForMemberInfo(destPropertyName, sourceExpression);
+        return true;
+    }
+
+    /// <summary>Renames all <see cref="IdentifierNameSyntax"/> nodes with a given text to a new name.</summary>
+    private sealed class IdentifierRenamer : CSharpSyntaxRewriter
+    {
+        private readonly string _oldName;
+        private readonly string _newName;
+
+        public IdentifierRenamer(string oldName, string newName)
+        {
+            _oldName = oldName;
+            _newName = newName;
+        }
+
+        public override SyntaxNode VisitIdentifierName(IdentifierNameSyntax node)
+        {
+            if (node.Identifier.ValueText == _oldName)
+            {
+                return node.WithIdentifier(
+                    SyntaxFactory.Identifier(_newName).WithTriviaFrom(node.Identifier));
+            }
+
+            return node;
+        }
     }
 }

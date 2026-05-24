@@ -53,12 +53,13 @@ The table below scores MappShark against the most popular .NET object-mapping li
 8. [Dictionary Mapping](#dictionary-mapping)
 9. [Custom Value Converters](#custom-value-converters)
 10. [Organizing Mappings with Profiles](#organizing-mappings-with-profiles)
-11. [Reverse Mapping with BothWays](#reverse-mapping-with-bothways)
-12. [IQueryable Projections (EF Core)](#iqueryable-projections-ef-core)
-13. [Strict Generated Mode](#strict-generated-mode)
-14. [Build-Time Diagnostics](#build-time-diagnostics)
-15. [API Reference](#api-reference)
-16. [Targets & Compatibility](#targets--compatibility)
+11. [Custom Property Mappings with ForMember](#custom-property-mappings-with-formember)
+12. [Reverse Mapping with BothWays](#reverse-mapping-with-bothways)
+13. [IQueryable Projections (EF Core)](#iqueryable-projections-ef-core)
+14. [Strict Generated Mode](#strict-generated-mode)
+15. [Build-Time Diagnostics](#build-time-diagnostics)
+16. [API Reference](#api-reference)
+17. [Targets & Compatibility](#targets--compatibility)
 
 ---
 
@@ -492,6 +493,48 @@ public class OrderMappingProfile : MappSharkProfile
 ```
 
 > **Available since v1.0.0**
+
+---
+
+## Custom Property Mappings with ForMember
+
+`ForMember` lets you define custom property mappings directly inside a `MappSharkProfile`, using a plain lambda expression as the resolver. This is the recommended approach for:
+
+- **Nested path access** — reading a property from a child object (`src => src.User.UserName`)
+- **Computed / aggregate values** — any expression that cannot be expressed as a direct property copy (`src => src.PostVotes!.Count(v => v.IsRelevant)`)
+
+```csharp
+using MappShark;
+
+public class PostMappingProfile : MappSharkProfile
+{
+    public PostMappingProfile()
+    {
+        CreateMap<PostEntity, PostDto>()
+            .ForMember(dto => dto.AuthorUserName,   src => src.User!.UserName)
+            .ForMember(dto => dto.RelevantVotes,    src => src.PostVotes!.Count(v => v.IsRelevant));
+    }
+}
+```
+
+The resolver lambda body is emitted verbatim into the generated mapper method — there is no runtime delegate invocation overhead on the hot path.
+
+### Registering ForMember for the Reflection Fallback Path
+
+When the Roslyn source generator is active (the default in any project that references the MappShark NuGet), `ForMember` mappings are generated at compile time. No registration call is needed.
+
+If you are using MappShark **without** the source generator (e.g., in a dynamically loaded assembly), call `Mapper.UseProfile<T>()` at startup to register the ForMember delegates:
+
+```csharp
+// Call once at application startup, before any mapping takes place.
+Mapper.UseProfile<PostMappingProfile>();
+```
+
+> **Note:** `ForMember` takes priority over name-based fallback. If a destination property is covered by both a `ForMember` override and a same-name auto-mapping, `ForMember` wins.
+
+> **Note:** Properties mapped via `ForMember` are excluded from `Mapper.Projection()` / `Mapper.ProjectMany()` — LINQ expression trees cannot translate arbitrary C# expressions to SQL.
+
+> **Available since v2.0.0**
 
 ---
 

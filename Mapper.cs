@@ -26,9 +26,9 @@ public static class Mapper
             throw new ArgumentNullException(nameof(source));
         }
 
-        if (Internal.GeneratedMapperBridge<TSource, TDestination>.TryMap(source, out var generated))
+        if (Internal.MapperRegistry.TryGetMapper<TSource, TDestination>(out var generatedMapper))
         {
-            return generated;
+            return generatedMapper(source);
         }
 
         if (AppContext.TryGetSwitch("MappShark.StrictGeneratedMode", out var strictGeneratedMode)
@@ -81,13 +81,32 @@ public static class Mapper
     public static Expression<Func<TSource, TDestination>> Projection<TSource, TDestination>()
         where TDestination : new()
     {
-        if (Internal.GeneratedMapperBridge<TSource, TDestination>.TryGetProjection(out var projection))
+        if (Internal.MapperRegistry.TryGetProjection<TSource, TDestination>(out var projection))
         {
-            return projection;
+            return projection!;
         }
 
         throw new InvalidOperationException(
             $"No generated projection was found for '{typeof(TSource).FullName}' -> '{typeof(TDestination).FullName}'. " +
             "Ensure Mapper.Map<TSource, TDestination>() or Mapper.BothWays<TSource, TDestination>() is called somewhere in the project so the source generator produces a projection.");
+    }
+
+    /// <summary>
+    /// Instantiates the given profile and registers its <c>ForMember</c> overrides for reflection-based mapping.
+    /// Call this at application startup, before the first <see cref="Map{TSource,TDestination}"/> call, for each
+    /// profile that defines <see cref="IMapConfiguration{TSource,TDestination}.ForMember{TMember}"/> entries.
+    /// </summary>
+    /// <remarks>
+    /// When the MappShark source generator is active, <c>ForMember</c> expressions are emitted as generated code
+    /// and this method is not required for the generated mapping path. It is only needed to activate the
+    /// reflection-based fallback path (e.g. in test projects that reference the library without the generator,
+    /// or for mapping pairs not yet covered by the generator).
+    /// </remarks>
+    /// <typeparam name="TProfile">A concrete <see cref="MappSharkProfile"/> subclass with a public parameterless constructor.</typeparam>
+    public static void UseProfile<TProfile>() where TProfile : MappSharkProfile, new()
+    {
+        // Constructing the profile executes CreateMap / ForMember calls, which register
+        // delegates in ProfileMappingRegistry via MapConfiguration.ForMember.
+        _ = new TProfile();
     }
 }

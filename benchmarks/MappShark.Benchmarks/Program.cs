@@ -1,5 +1,6 @@
 using AutoMapper;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
 using Mapster;
@@ -7,10 +8,16 @@ using MappShark;
 using MappSharkMapper = MappShark.Mapper;
 using Riok.Mapperly.Abstractions;
 
+if (args.Length > 0 && args[0] == "--quick")
+{
+    QuickBenchmarks.Run();
+    return;
+}
+
 BenchmarkRunner.Run<MappingBenchmarks>();
 
 [MemoryDiagnoser]
-[SimpleJob(launchCount: 1, warmupCount: 10, iterationCount: 20)]
+[ShortRunJob]
 public class MappingBenchmarks
 {
     private OrderEntity _source = null!;

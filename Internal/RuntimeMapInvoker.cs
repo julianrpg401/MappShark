@@ -19,6 +19,14 @@ internal static class RuntimeMapInvoker
 
     private static Func<object, object?> CreateMapper(TypePair pair)
     {
+        // Fast path: use the registry's pre-built untyped delegate (no reflection).
+        if (MapperRegistry.TryGetUntypedMapper(pair.SourceType, pair.DestinationType, out var untypedMapper)
+            && untypedMapper is not null)
+        {
+            return untypedMapper;
+        }
+
+        // Slow path: close the generic method for types not yet registered (reflection fallback).
         try
         {
             var closedMethod = MapGenericMethod.MakeGenericMethod(pair.SourceType, pair.DestinationType);
