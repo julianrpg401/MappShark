@@ -442,8 +442,13 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         }
 
         var key = new TypePair(normalizedSourceType, normalizedDestinationType);
-        if (knownPairs.ContainsKey(key))
+        if (knownPairs.TryGetValue(key, out var existing))
         {
+            // The pair is already queued (e.g. registered by a Mapper.Map/MapMany call). If this
+            // invocation comes from a profile and carries ForMember overrides, merge them into the
+            // existing context. Both the queue and the dictionary hold the same object reference, so
+            // TryBuildGeneratedPair will see the merged ForMembers when it dequeues the context.
+            existing.MergeForMembers(forMembers);
             return;
         }
 
@@ -2285,12 +2290,15 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
     private sealed class MapPairContext
     {
+        private List<ForMemberInfo>? _forMembers;
+
         public MapPairContext(ITypeSymbol sourceType, ITypeSymbol destinationType, Location invocationLocation, ImmutableArray<ForMemberInfo> forMembers = default)
         {
             SourceType = sourceType;
             DestinationType = destinationType;
             InvocationLocation = invocationLocation;
-            ForMembers = forMembers.IsDefault ? ImmutableArray<ForMemberInfo>.Empty : forMembers;
+            if (!forMembers.IsDefaultOrEmpty)
+                _forMembers = new List<ForMemberInfo>(forMembers);
         }
 
         public ITypeSymbol SourceType { get; }
@@ -2299,7 +2307,26 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
         public Location InvocationLocation { get; }
 
-        public ImmutableArray<ForMemberInfo> ForMembers { get; }
+        public ImmutableArray<ForMemberInfo> ForMembers =>
+            _forMembers is null ? ImmutableArray<ForMemberInfo>.Empty : _forMembers.ToImmutableArray();
+
+        /// <summary>
+        /// Merges ForMember overrides from a later-discovered invocation (e.g. a profile CreateMap call
+        /// found after the pair was already registered by a Mapper.Map/MapMany call).
+        /// Existing entries for a given destination property name are not overwritten.
+        /// </summary>
+        internal void MergeForMembers(ImmutableArray<ForMemberInfo> additional)
+        {
+            if (additional.IsDefaultOrEmpty)
+                return;
+
+            _forMembers ??= new List<ForMemberInfo>();
+            foreach (var fm in additional)
+            {
+                if (!_forMembers.Exists(x => string.Equals(x.DestinationPropertyName, fm.DestinationPropertyName, System.StringComparison.OrdinalIgnoreCase)))
+                    _forMembers.Add(fm);
+            }
+        }
     }
 
     private sealed class GeneratedPair

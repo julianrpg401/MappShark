@@ -7,13 +7,16 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>2.0.0</Version>
+    <Version>2.0.1</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v2.0.1
+- Fix: ForMember overrides in a MappSharkProfile are no longer silently discarded when the same type pair was already registered by a Mapper.Map/MapMany call. The source generator now merges ForMember overrides from a profile into an existing pair registration instead of ignoring them.
+
 v2.0.0
 - New: ForMember in MappSharkProfile — define custom property mappings with lambda expressions, including nested paths (src => src.User.UserName) and computed values (src => src.PostVotes!.Count(v => v.IsRelevant)). Chain .ForMember(...) on CreateMap&lt;&gt;() inside any profile.
 - New: Mapper.UseProfile&lt;TProfile&gt;() — registers a profile's ForMember delegates for the reflection-based mapping path. Not required when the Roslyn source generator is active.
