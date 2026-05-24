@@ -229,13 +229,20 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         if (!string.Equals(methodSymbol.Name, "CreateMap", StringComparison.Ordinal) || methodSymbol.TypeArguments.Length != 2)
             return null;
 
-        // Must be declared in a class inheriting MappSharkProfile
-        var containingType = methodSymbol.ContainingType;
-        if (containingType is null)
+        // Walk up the syntax tree to find the class that CONTAINS this invocation.
+        // We cannot use methodSymbol.ContainingType here: that returns the *declaring* type
+        // (MappSharkProfile), not the *calling* type (e.g. PostMappingProfile), so the
+        // base-type check below would always fail.
+        var classDeclaration = invocation.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        if (classDeclaration is null)
             return null;
 
-        // Check that the base type chain includes MappSharkProfile
-        var baseType = containingType.BaseType;
+        var classSymbol = syntaxContext.SemanticModel.GetDeclaredSymbol(classDeclaration, cancellationToken) as INamedTypeSymbol;
+        if (classSymbol is null)
+            return null;
+
+        // Check that the calling class inherits from MappSharkProfile.
+        var baseType = classSymbol.BaseType;
         var isProfile = false;
         while (baseType is not null)
         {
@@ -251,6 +258,9 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             return null;
 
         if (ContainsTypeParameter(methodSymbol.TypeArguments[0]) || ContainsTypeParameter(methodSymbol.TypeArguments[1]))
+            return null;
+
+        if (!IsAccessibleForGeneration(methodSymbol.TypeArguments[0]) || !IsAccessibleForGeneration(methodSymbol.TypeArguments[1]))
             return null;
 
         return new MapInvocationInfo(
@@ -309,6 +319,12 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
             return null;
         }
 
+        if (!IsAccessibleForGeneration(methodSymbol.TypeArguments[0])
+            || !IsAccessibleForGeneration(methodSymbol.TypeArguments[1]))
+        {
+            return null;
+        }
+
         return new MapInvocationInfo(
             sourceType: NormalizeTypeForPair(methodSymbol.TypeArguments[0]),
             destinationType: NormalizeTypeForPair(methodSymbol.TypeArguments[1]),
@@ -340,6 +356,23 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Returns false if <paramref name="type"/> or any of its containing types is private or protected,
+    /// meaning the generated code (which lives in a sibling file of the same assembly) cannot reference it.
+    /// </summary>
+    private static bool IsAccessibleForGeneration(ITypeSymbol type)
+    {
+        ISymbol? current = type;
+        while (current is not null)
+        {
+            var acc = current.DeclaredAccessibility;
+            if (acc == Accessibility.Private || acc == Accessibility.Protected || acc == Accessibility.ProtectedAndInternal)
+                return false;
+            current = current.ContainingType;
+        }
+        return true;
     }
 
     private static void Execute(Compilation compilation, ImmutableArray<MapInvocationInfo> invocations, SourceProductionContext context)

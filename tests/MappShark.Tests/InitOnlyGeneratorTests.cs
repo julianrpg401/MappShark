@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using MappShark;
 using Xunit;
 
@@ -206,5 +208,106 @@ public sealed class PositionalRecordGeneratorTests
 
         Assert.Equal(id, result.PublicId);     // [MapTo("PublicId")] on positional parameter Id
         Assert.Equal("Alice", result.DisplayName); // [MapTo("DisplayName")] on positional parameter Name
+    }
+}
+
+// ─── Public types for ForMember generator-path tests ──────────────────────────
+// Types must be public so the source generator can emit IndexedMapResolver.g.cs
+// referencing them. Private or nested types fall back to reflection.
+
+public sealed class ArticleAuthor
+{
+    public string UserName { get; set; } = string.Empty;
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+}
+
+public sealed class ArticleEntity
+{
+    public int Id { get; set; }
+    public string Body { get; set; } = string.Empty;
+    public ArticleAuthor Author { get; set; } = new();
+    public System.Collections.Generic.List<ArticleVote> Votes { get; set; } = new();
+}
+
+public sealed class ArticleVote
+{
+    public bool IsPositive { get; set; }
+}
+
+// Positional record — ForMember must be emitted via generated constructor-call syntax.
+public sealed record ArticleDto(
+    int Id,
+    string Body,
+    string AuthorUserName,
+    string AuthorFullName,
+    int PositiveVoteCount);
+
+public sealed class ArticleMappingProfile : MappSharkProfile
+{
+    public ArticleMappingProfile()
+    {
+        CreateMap<ArticleEntity, ArticleDto>()
+            .ForMember(dto => dto.AuthorUserName,    src => src.Author.UserName)
+            .ForMember(dto => dto.AuthorFullName,    src => $"{src.Author.FirstName} {src.Author.LastName}")
+            .ForMember(dto => dto.PositiveVoteCount, src => src.Votes.Count(v => v.IsPositive));
+    }
+}
+
+/// <summary>
+/// Tests for ForMember via the generated code path.
+/// The profile uses public types so the source generator produces a full constructor-call
+/// mapper that inlines the ForMember lambda bodies.
+/// </summary>
+public sealed class ForMemberGeneratorTests
+{
+    [Fact]
+    public void ForMember_NestedPath_GeneratedMapper_MapsCorrectly()
+    {
+        var source = new ArticleEntity
+        {
+            Id = 42,
+            Body = "Hello world",
+            Author = new ArticleAuthor { UserName = "ada", FirstName = "Ada", LastName = "Lovelace" },
+            Votes = new() { new ArticleVote { IsPositive = true }, new ArticleVote { IsPositive = false } }
+        };
+
+        var dto = Mapper.Map<ArticleEntity, ArticleDto>(source);
+
+        Assert.Equal(42, dto.Id);
+        Assert.Equal("Hello world", dto.Body);
+        Assert.Equal("ada", dto.AuthorUserName);
+        Assert.Equal("Ada Lovelace", dto.AuthorFullName);
+        Assert.Equal(1, dto.PositiveVoteCount);
+    }
+
+    [Fact]
+    public void ForMember_MapMany_GeneratedMapper_MapsAllItems()
+    {
+        var sources = new[]
+        {
+            new ArticleEntity
+            {
+                Id = 1,
+                Body = "First",
+                Author = new ArticleAuthor { UserName = "user1", FirstName = "Alan", LastName = "Turing" },
+                Votes = new() { new ArticleVote { IsPositive = true }, new ArticleVote { IsPositive = true } }
+            },
+            new ArticleEntity
+            {
+                Id = 2,
+                Body = "Second",
+                Author = new ArticleAuthor { UserName = "user2", FirstName = "Grace", LastName = "Hopper" },
+                Votes = new()
+            }
+        };
+
+        var dtos = Mapper.MapMany<ArticleEntity, ArticleDto>(sources);
+
+        Assert.Equal(2, dtos.Count);
+        Assert.Equal("Alan Turing", dtos[0].AuthorFullName);
+        Assert.Equal(2, dtos[0].PositiveVoteCount);
+        Assert.Equal("Grace Hopper", dtos[1].AuthorFullName);
+        Assert.Equal(0, dtos[1].PositiveVoteCount);
     }
 }

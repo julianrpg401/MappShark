@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\MappShark.csproj" />
-    <ProjectReference Include="..\..\src\MappShark.Generator\MappShark.Generator.csproj" />
+    <ProjectReference Include="..\..\src\MappShark.Generator\MappShark.Generator.csproj"
+                      OutputItemType="Analyzer" />
   </ItemGroup>
 </Project>
