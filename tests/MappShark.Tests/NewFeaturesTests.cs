@@ -488,4 +488,89 @@ public sealed class NewFeaturesTests
                 .ForMember(dto => dto.DisplayName, src => src.CanonicalName);
         }
     }
+
+    // ──────────────────────────────────────────────────────────────────────────────
+    // Feature 7: [MapFrom] dot-path notation (reflection fallback — private types)
+    // ──────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void MapFrom_DotPath_TwoLevel_ReflectionPath_MapsCorrectly()
+    {
+        var source = new DotSource
+        {
+            Id = 5,
+            Inner = new DotInner { Value = "hello" }
+        };
+
+        var result = Mapper.Map<DotSource, DotFlatDest>(source);
+
+        Assert.Equal(5, result.Id);
+        Assert.Equal("hello", result.InnerValue);
+    }
+
+    [Fact]
+    public void MapFrom_DotPath_ThreeLevel_ReflectionPath_MapsCorrectly()
+    {
+        var source = new DeepSource
+        {
+            Level1 = new DeepLevel1
+            {
+                Level2 = new DeepLevel2 { Name = "deep-value" }
+            }
+        };
+
+        var result = Mapper.Map<DeepSource, DeepFlat>(source);
+
+        Assert.Equal("deep-value", result.Name);
+    }
+
+    [Fact]
+    public void MapFrom_DotPath_NullIntermediateSegment_ReturnsNull()
+    {
+        var source = new DotSource { Id = 1, Inner = null };
+        var result = Mapper.Map<DotSource, DotFlatDest>(source);
+
+        Assert.Equal(1, result.Id);
+        Assert.Null(result.InnerValue); // Inner is null → InnerValue should be null
+    }
+
+    private sealed class DotInner
+    {
+        public string Value { get; set; } = string.Empty;
+    }
+
+    private sealed class DotSource
+    {
+        public int Id { get; set; }
+        public DotInner? Inner { get; set; }
+    }
+
+    private sealed class DotFlatDest
+    {
+        public int Id { get; set; }
+
+        [MapFrom("Inner.Value")]
+        public string? InnerValue { get; set; }
+    }
+
+    private sealed class DeepLevel2
+    {
+        public string Name { get; set; } = string.Empty;
+    }
+
+    private sealed class DeepLevel1
+    {
+        public DeepLevel2? Level2 { get; set; }
+    }
+
+    private sealed class DeepSource
+    {
+        public DeepLevel1? Level1 { get; set; }
+    }
+
+    private sealed class DeepFlat
+    {
+        [MapFrom("Level1.Level2.Name")]
+        public string? Name { get; set; }
+    }
 }

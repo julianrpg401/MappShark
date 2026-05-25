@@ -296,6 +296,33 @@ public static class Usage { public static DestinationModel Map(SourceModel s) =>
         Assert.Contains(diagnostics, d => d.Id == "MSP016");
     }
 
+    [Fact]
+    public void ReportsMsp017WhenMapFromDotPathSegmentNotFound()
+    {
+        const string sourceCode = @"
+using MappShark;
+public sealed class SourceModel { public int Id { get; set; } }
+public sealed class DestinationModel { [MapFrom(""Nonexistent.Value"")] public int Id { get; set; } }
+public static class Usage { public static DestinationModel Map(SourceModel s) => Mapper.Map<SourceModel, DestinationModel>(s); }
+";
+        var diagnostics = RunGenerator(sourceCode);
+        Assert.Contains(diagnostics, d => d.Id == "MSP017");
+    }
+
+    [Fact]
+    public void ReportsMsp017WhenIntermediateSegmentNotFound()
+    {
+        const string sourceCode = @"
+using MappShark;
+public sealed class InnerModel { public string Name { get; set; } = string.Empty; }
+public sealed class SourceModel { public InnerModel Inner { get; set; } = new(); }
+public sealed class DestinationModel { [MapFrom(""Inner.Missing.Name"")] public string Name { get; set; } = string.Empty; }
+public static class Usage { public static DestinationModel Map(SourceModel s) => Mapper.Map<SourceModel, DestinationModel>(s); }
+";
+        var diagnostics = RunGenerator(sourceCode);
+        Assert.Contains(diagnostics, d => d.Id == "MSP017");
+    }
+
     private static ImmutableArray<Diagnostic> RunGenerator(string sourceCode)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(sourceCode);

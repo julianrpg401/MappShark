@@ -311,3 +311,106 @@ public sealed class ForMemberGeneratorTests
         Assert.Equal(0, dtos[1].PositiveVoteCount);
     }
 }
+
+// ─── Public types for [MapFrom] dot-path generator-path tests ─────────────────
+
+public sealed class PostSource
+{
+    public int Id { get; set; }
+    public PostAuthor Author { get; set; } = new();
+}
+
+public sealed class PostAuthor
+{
+    public string UserName { get; set; } = string.Empty;
+    public PostAuthorContact Contact { get; set; } = new();
+}
+
+public sealed class PostAuthorContact
+{
+    public string Email { get; set; } = string.Empty;
+}
+
+// Regular class destination with [MapFrom] dot-paths on properties
+public sealed class PostFlatDto
+{
+    public int Id { get; set; }
+
+    [MapFrom("Author.UserName")]
+    public string AuthorUserName { get; set; } = string.Empty;
+
+    [MapFrom("Author.Contact.Email")]
+    public string AuthorEmail { get; set; } = string.Empty;
+}
+
+// Positional record destination with [MapFrom] dot-paths on constructor parameters
+public sealed record PostFlatRecord(
+    int Id,
+    [MapFrom("Author.UserName")] string AuthorUserName,
+    [MapFrom("Author.Contact.Email")] string AuthorEmail);
+
+/// <summary>
+/// Tests for [MapFrom] dot-path support via the generated code path.
+/// Public types allow the source generator to emit an optimized mapper with verbatim
+/// property-chain expressions (e.g. <c>source.Author.UserName</c>).
+/// </summary>
+public sealed class MapFromDotPathGeneratorTests
+{
+    [Fact]
+    public void MapFrom_DotPath_TwoLevel_GeneratorPath_ClassDest_MapsCorrectly()
+    {
+        var source = new PostSource
+        {
+            Id = 10,
+            Author = new PostAuthor
+            {
+                UserName = "alice",
+                Contact = new PostAuthorContact { Email = "alice@example.com" }
+            }
+        };
+
+        var result = Mapper.Map<PostSource, PostFlatDto>(source);
+
+        Assert.Equal(10, result.Id);
+        Assert.Equal("alice", result.AuthorUserName);
+        Assert.Equal("alice@example.com", result.AuthorEmail);
+    }
+
+    [Fact]
+    public void MapFrom_DotPath_TwoAndThreeLevel_GeneratorPath_PositionalRecord_MapsCorrectly()
+    {
+        var source = new PostSource
+        {
+            Id = 20,
+            Author = new PostAuthor
+            {
+                UserName = "bob",
+                Contact = new PostAuthorContact { Email = "bob@example.com" }
+            }
+        };
+
+        var result = Mapper.Map<PostSource, PostFlatRecord>(source);
+
+        Assert.Equal(20, result.Id);
+        Assert.Equal("bob", result.AuthorUserName);
+        Assert.Equal("bob@example.com", result.AuthorEmail);
+    }
+
+    [Fact]
+    public void MapFrom_DotPath_GeneratorPath_MapMany_MapsAllItems()
+    {
+        var sources = new[]
+        {
+            new PostSource { Id = 1, Author = new PostAuthor { UserName = "u1", Contact = new() { Email = "u1@x.com" } } },
+            new PostSource { Id = 2, Author = new PostAuthor { UserName = "u2", Contact = new() { Email = "u2@x.com" } } },
+        };
+
+        var results = Mapper.MapMany<PostSource, PostFlatRecord>(sources);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("u1", results[0].AuthorUserName);
+        Assert.Equal("u1@x.com", results[0].AuthorEmail);
+        Assert.Equal("u2", results[1].AuthorUserName);
+        Assert.Equal("u2@x.com", results[1].AuthorEmail);
+    }
+}

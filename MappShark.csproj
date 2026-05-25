@@ -7,13 +7,16 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>MappShark</PackageId>
-    <Version>2.0.2</Version>
+    <Version>2.1.0</Version>
     <Authors>Julian Garcia</Authors>
     <Copyright>Copyright (c) 2026 Julian Garcia</Copyright>
     <RepositoryUrl>https://github.com/julianrpg401/MappShark</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/julianrpg401/MappShark</PackageProjectUrl>
     <PackageReleaseNotes>
+v2.1.0
+- New: [MapFrom] now supports dot-path notation for navigating nested properties without a profile. Example: [MapFrom("Author.UserName")] maps source.Author.UserName to the destination property. Arbitrary depth is supported (e.g. "A.B.C.D"). Works on regular properties and positional record parameters. The source generator emits a verbatim property-chain expression at compile time; the reflection fallback builds a chained getter at runtime. New diagnostic MSP017 is reported when any path segment cannot be resolved to a public property.
+
 v2.0.2
 - Fix: MappSharkProfile subclasses now correctly trigger generated mapper code. Previously GetProfileInvocation used methodSymbol.ContainingType which returns the *declaring* type (MappSharkProfile), not the *calling* type (e.g. PostMappingProfile). The base-type check therefore always failed silently — profiles never generated mapper pairs in any prior version. Fixed by walking the syntax tree to find the calling class.
 - Fix: Source generator now skips type pairs where either type is private or protected, avoiding inaccessible-type compile errors when the generator is properly wired as an analyzer in a test/consumer project. Private types fall back to the reflection mapper as intended.

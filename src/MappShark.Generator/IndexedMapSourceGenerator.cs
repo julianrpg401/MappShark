@@ -169,6 +169,15 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
         isEnabledByDefault: true,
         description: "A property cannot use both [MapIndex] and [MapTo] simultaneously.");
 
+    private static readonly DiagnosticDescriptor MapFromDotPathNotFoundDescriptor = new(
+        id: "MSP017",
+        title: "[MapFrom] dot-path segment not found",
+        messageFormat: "Destination property '{0}' uses [MapFrom(\"{1}\")] but the path segment '{2}' was not found as a readable public property on the expected type.",
+        category: "MappShark",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Each segment of a dot-path in [MapFrom] must resolve to a readable public property on the type returned by the previous segment.");
+
     private static readonly SymbolDisplayFormat FullyQualifiedTypeFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
@@ -372,6 +381,43 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
                 return false;
             current = current.ContainingType;
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Resolves each segment of a dot-notation path (e.g. "Author.Address.City") against the
+    /// source type, building the verbatim expression "source.Author.Address.City".
+    /// Returns false and populates <paramref name="failedSegment"/> with the first unresolvable
+    /// segment (e.g. "Address") if any segment is missing.
+    /// </summary>
+    private static bool TryResolveDotPath(
+        string dotPath,
+        ITypeSymbol sourceType,
+        out string resolvedExpression,
+        out string failedSegment)
+    {
+        var segments = dotPath.Split('.');
+        var currentType = sourceType;
+        var sb = new System.Text.StringBuilder("source");
+        foreach (var seg in segments)
+        {
+            var prop = GetAllProperties(currentType)
+                .FirstOrDefault(p =>
+                    !p.IsStatic
+                    && p.GetMethod is not null
+                    && p.GetMethod.DeclaredAccessibility == Accessibility.Public
+                    && string.Equals(p.Name, seg, StringComparison.Ordinal));
+            if (prop is null)
+            {
+                resolvedExpression = string.Empty;
+                failedSegment = seg;
+                return false;
+            }
+            sb.Append('.').Append(EscapeIdentifier(seg));
+            currentType = prop.Type;
+        }
+        resolvedExpression = sb.ToString();
+        failedSegment = string.Empty;
         return true;
     }
 
@@ -687,7 +733,28 @@ public sealed class IndexedMapSourceGenerator : IIncrementalGenerator
 
             if (mapFromOverrides.TryGetValue(destProperty.Name, out var fromSourceName))
             {
-                // [MapFrom("X")] — explicit name override on destination property
+                if (fromSourceName.Contains('.'))
+                {
+                    // Dot-notation path (e.g. "Author.UserName") — validate each segment and emit verbatim expression
+                    if (!TryResolveDotPath(fromSourceName, pair.SourceType, out var dotExpr, out var failedSegment))
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            MapFromDotPathNotFoundDescriptor,
+                            GetLocationOrFallback(destProperty, pair.InvocationLocation),
+                            destProperty.Name,
+                            fromSourceName,
+                            failedSegment));
+                        hasErrors = true;
+                        continue;
+                    }
+
+                    var isInitOnlyDot = destProperty.SetMethod?.IsInitOnly == true;
+                    assignments.Add(new PropertyAssignment(-2, destProperty.Name, dotExpr, isInitOnlyDot, isForMember: true));
+                    destinationMappedNames.Add(destProperty.Name);
+                    continue;
+                }
+
+                // [MapFrom("X")] — explicit simple name override on destination property
                 if (!sourceByName.TryGetValue(fromSourceName, out srcProperty))
                 {
                     context.ReportDiagnostic(Diagnostic.Create(

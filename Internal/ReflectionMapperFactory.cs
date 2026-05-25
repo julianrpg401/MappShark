@@ -228,6 +228,49 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
             Type? mapToConverterType = null;
             if (mapFromOverrides.TryGetValue(destProp.Name, out var fromSourceName))
             {
+                if (fromSourceName.Contains('.'))
+                {
+                    // Dot-notation path (e.g. "Author.UserName"):
+                    // Source.GetValue reads the first segment; the converter navigates the rest.
+                    var segments = fromSourceName.Split('.');
+                    var firstProp = sourceType.GetProperty(segments[0], BindingFlags.Instance | BindingFlags.Public);
+                    if (firstProp?.GetMethod is null || !firstProp.GetMethod.IsPublic)
+                        continue;
+
+                    var chainGetter = TryBuildReflectionChainGetter(firstProp.PropertyType, segments, 1, out var finalType);
+                    if (chainGetter is null)
+                        continue;
+
+                    Func<object?, object?> dotConverter;
+                    if (destProp.PropertyType.IsAssignableFrom(finalType))
+                    {
+                        dotConverter = chainGetter;
+                    }
+                    else if (TryBuildCollectionConverter(finalType, destProp.PropertyType, out var colConv))
+                    {
+                        var chainForCol = chainGetter;
+                        dotConverter = v => colConv(chainForCol(v));
+                    }
+                    else if (CanUseNestedMap(finalType, destProp.PropertyType))
+                    {
+                        var srcT = finalType;
+                        var dstT = destProp.PropertyType;
+                        var chainForNested = chainGetter;
+                        dotConverter = v =>
+                        {
+                            var navigated = chainForNested(v);
+                            return navigated is null ? null : RuntimeMapInvoker.Map(srcT, dstT, navigated);
+                        };
+                    }
+                    else
+                    {
+                        continue; // incompatible types — skip silently
+                    }
+
+                    pairs.Add(new PropertyPair(firstProp, destProp, dotConverter));
+                    continue;
+                }
+
                 if (!sourceByName.TryGetValue(fromSourceName, out srcProp))
                     continue; // [MapFrom] source not found — skip (generator would have reported MSP014)
             }
@@ -285,6 +328,49 @@ internal static class ReflectionMapperFactory<TSource, TDestination>
         }
 
         return pairs;
+    }
+
+    /// <summary>
+    /// Builds a <see cref="Func{T, TResult}"/> that navigates property segments
+    /// <paramref name="segments"/>[<paramref name="fromIndex"/>..] on an instance of
+    /// <paramref name="startType"/>, resolving each segment via reflection.
+    /// Returns <c>null</c> if any segment cannot be resolved on the preceding type.
+    /// Sets <paramref name="finalType"/> to the type returned by the last resolved property.
+    /// </summary>
+    private static Func<object?, object?>? TryBuildReflectionChainGetter(
+        Type startType,
+        string[] segments,
+        int fromIndex,
+        out Type finalType)
+    {
+        finalType = startType;
+        if (fromIndex >= segments.Length)
+            return static v => v;
+
+        var currentType = startType;
+        var props = new PropertyInfo[segments.Length - fromIndex];
+        for (var i = fromIndex; i < segments.Length; i++)
+        {
+            var prop = currentType.GetProperty(segments[i], BindingFlags.Instance | BindingFlags.Public);
+            if (prop?.GetMethod is null || !prop.GetMethod.IsPublic)
+                return null;
+            props[i - fromIndex] = prop;
+            currentType = prop.PropertyType;
+        }
+
+        finalType = currentType;
+
+        // Build closure chain (innermost-first): the outermost lambda navigates the first
+        // remaining segment, passing the result into the next lambda, and so on.
+        Func<object?, object?> chain = static v => v;
+        for (var i = props.Length - 1; i >= 0; i--)
+        {
+            var p = props[i];
+            var next = chain;
+            chain = v => v is null ? null : next(p.GetValue(v));
+        }
+
+        return chain;
     }
 
     private static Dictionary<int, PropertyInfo> CollectIndexedSourceProperties(Type type)
