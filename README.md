@@ -47,6 +47,7 @@ The table below scores MappShark against the most popular .NET object-mapping li
    - [Index-Based Mapping](#1-index-based-mapping-mapindex)
    - [Name-Based Fallback](#2-name-based-fallback)
    - [Name Override Attributes](#3-name-override-attributes-mapfrom--mapto)
+     - [Dot-Path Notation](#dot-path-notation-nested-property-access)
 5. [Records and Init-Only Properties](#records-and-init-only-properties)
 6. [Nested Objects](#nested-objects)
 7. [Collections](#collections)
@@ -236,6 +237,72 @@ When multiple strategies could resolve the same destination property, MappShark 
 > **Note:** `[MapFrom]` and `[MapIndex]` cannot be combined on the same property (diagnostic `MSP015`). `[MapTo]` and `[MapIndex]` cannot be combined either (`MSP016`).
 
 > **Available since v1.0.0**
+
+#### Dot-Path Notation (nested property access)
+
+`[MapFrom]` accepts a **dot-separated path** to read from a chain of nested properties — no profile or `ForMember` call needed. Arbitrary depth is supported.
+
+```csharp
+public class PostEntity
+{
+    public int Id { get; set; }
+    public AuthorEntity Author { get; set; } = new();
+}
+
+public class AuthorEntity
+{
+    public string UserName { get; set; } = string.Empty;
+    public ContactInfo Contact { get; set; } = new();
+}
+
+public class ContactInfo
+{
+    public string Email { get; set; } = string.Empty;
+}
+
+public class PostDto
+{
+    public int Id { get; set; }
+
+    [MapFrom("Author.UserName")]
+    public string AuthorUserName { get; set; } = string.Empty;
+
+    [MapFrom("Author.Contact.Email")]
+    public string AuthorEmail { get; set; } = string.Empty;
+}
+
+var dto = Mapper.Map<PostEntity, PostDto>(entity);
+// dto.AuthorUserName == entity.Author.UserName
+// dto.AuthorEmail    == entity.Author.Contact.Email
+```
+
+The source generator emits the path verbatim into the produced code:
+
+```csharp
+private static PostDto MapPair_0(PostEntity source) =>
+    new PostDto
+    {
+        Id             = source.Id,
+        AuthorUserName = source.Author.UserName,
+        AuthorEmail    = source.Author.Contact.Email,
+    };
+```
+
+Dot-paths also work on **positional record parameters**:
+
+```csharp
+public sealed record PostDto(
+    int Id,
+    [MapFrom("Author.UserName")]       string AuthorUserName,
+    [MapFrom("Author.Contact.Email")]  string AuthorEmail
+);
+```
+
+The reflection fallback resolves the property chain at runtime, so dot-paths work even when the source generator is not active.
+
+> If any segment cannot be resolved to a readable public property on the preceding type, build error `MSP017` is reported.
+
+> **Available since v2.1.0**
 
 ---
 
@@ -612,6 +679,7 @@ MappShark surfaces configuration problems as **compiler errors or warnings** —
 | `MSP014` | Error | `[MapFrom]` references a source property that does not exist |
 | `MSP015` | Error | `[MapFrom]` and `[MapIndex]` used on the same property |
 | `MSP016` | Error | `[MapTo]` and `[MapIndex]` used on the same property |
+| `MSP017` | Error | A segment of a `[MapFrom]` dot-path cannot be resolved to a readable public property on the preceding type |
 
 ---
 
